@@ -540,10 +540,11 @@ bool PushOutSphere(rw::V3d &c, float r) {
 	return pushed;
 }
 
-// two spheres (knee and chest height) approximate a standing body; radius 0.35 m. ASSUMED dimensions, not taken from the exe
+// ped collision model, verified at 0x5BAB5C (CTempColModels): 3 spheres r=0.35 at z -0.2/0.2/0.6 about the ped origin, which is 1.0 above
+// the feet (box min z = -1.0). kEye (camera above feet) is still ASSUMED.
 void CollideWalker() {
 	constexpr float kRadius = 0.35f, kEye = 1.7f;
-	const float heights[2] = {0.6f, 1.3f}; // above the feet (camera is kEye above the feet)
+	const float heights[3] = {0.8f, 1.2f, 1.6f}; // above the feet
 	for (int iter = 0; iter < 3; iter++) {
 		bool any = false;
 		for (float h : heights) {
@@ -555,7 +556,7 @@ void CollideWalker() {
 }
 
 // Walk mode (G): the camera is a point 1.7 m above the ground with gravity. DEVIATION: the original uses a ped with a collision
-// capsule, animations and physics; horizontal collision uses two spheres (CollideWalker) with assumed dimensions.
+// capsule, animations and physics; horizontal collision uses the exe's three ped spheres (CollideWalker); only the eye height is assumed.
 bool gWalk = false;
 float gVelZ = 0.0f;
 
@@ -758,7 +759,7 @@ sk::EventStatus AppEventHandler(sk::Event e, void *param) {
 		if (sk::args.argc > 1) gameDir = sk::args.argv[1];
 		if (sk::args.argc > 3) { centerX = (float)atof(sk::args.argv[2]); centerY = (float)atof(sk::args.argv[3]); }
 		if (sk::args.argc > 4) loadRadius = (float)atof(sk::args.argv[4]);
-		gLog = fopen("sa_stream.log", "w");
+		gLog = fopen("E:/openSA/sa_view/sa_stream.log", "w");
 		if (!gLog) gLog = stderr;
 		return gameDir.empty() ? EVENTERROR : EVENTPROCESSED;
 	case RWINITIALIZE: return Initialize3D() ? EVENTPROCESSED : EVENTERROR;
