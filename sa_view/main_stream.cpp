@@ -1083,8 +1083,12 @@ void DrawSunDisc(float W, float H, float tanHalf) {
 	rw::SetRenderState(rw::VERTEXALPHA, 1);
 	rw::SetRenderState(rw::SRCBLEND, rw::BLENDSRCALPHA);
 	rw::SetRenderState(rw::DESTBLEND, rw::BLENDINVSRCALPHA);
-	quad(H * 0.06f, gTc.sunCorona, 90);
-	quad(H * 0.025f, gTc.sunCore, 255);
+	// CCoronas::DoSunAndMoon (0x6FC5A0): corona 1 (sun core colour) has size sunSize*2.7335, corona 2 (corona colour) sunSize*6, both placed at
+	// farClip*0.95 along the vector to the sun. DEVIATION: the sizes are taken as half-widths and drawn as flat squares (the original uses the
+	// particle.txd shiny-star / sun-flare textures, line-of-sight fading and flare sprites), alpha values are guesses.
+	float dist = std::max(gFarClip, 1.0f) * 0.95f, pxPerUnit = H * 0.5f / (tanHalf * dist);
+	quad(gTc.sunSize * 6.0f * pxPerUnit, gTc.sunCorona, 90);
+	quad(gTc.sunSize * 2.7335f * pxPerUnit, gTc.sunCore, 255);
 }
 
 // Sky gradient: timecyc sky-top colour at the top of the screen blending to sky-bottom at the horizon (the clear colour fills below it).
