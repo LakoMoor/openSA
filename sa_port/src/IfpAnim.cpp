@@ -52,7 +52,7 @@ size_t ParseIfp(const std::vector<uint8_t> &data, std::unordered_map<std::string
 		out[an] = std::move(anim);
 		count++;
 	}
-	return p == size ? count : 0;
+	return p <= size ? count : 0; // IMG entries are padded to whole sectors, so the file may be longer than the data
 }
 
 } // namespace sa

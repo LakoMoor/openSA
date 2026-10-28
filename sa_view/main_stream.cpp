@@ -777,6 +777,13 @@ void LoadPedAnims() {
 	std::vector<uint8_t> b((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 	size_t n = sa::ParseIfp(b, gAnims);
 	fprintf(gLog, "ped.ifp: %zu animations\n", n);
+	// the swim clips live in anim.img (swim.ifp)
+	sa::ImgV2 animImg;
+	if (animImg.Open(gameDir + "/anim/anim.img")) {
+		const sa::ImgEntry *e = animImg.Find("swim.ifp");
+		std::vector<uint8_t> sb;
+		if (e && animImg.Read(*e, sb)) fprintf(gLog, "swim.ifp: %zu animations\n", sa::ParseIfp(sb, gAnims));
+	}
 	auto it = gAnims.find("idle_stance");
 	gPedAnim = it != gAnims.end() ? &it->second : nil;
 }
@@ -831,7 +838,7 @@ void AnimatePed(float dt) {
 	gWasAirborne = air;
 	if (gLandTimer > 0.0f) gLandTimer -= dt;
 	if (gLaunchTimer > 0.0f) gLaunchTimer -= dt;
-	if (gWalk && gSwimming) SelectPedAnim("swim_tread"); // the swim_swim/crawl clips live in anim.img (not loaded), so moving also plays swim_tread
+	if (gWalk && gSwimming) SelectPedAnim(!moving ? "swim_tread" : sk::keys[' '] ? "swim_crawl" : "swim_breast"); // Space = sprint -> crawl
 	else if (air) SelectPedAnim(gLaunchTimer > 0.0f ? "jump_launch" : "jump_glide", gLaunchTimer <= 0.0f);
 	else if (gLandTimer > 0.0f) SelectPedAnim("jump_land", false);
 	else SelectPedAnim(PedClip(moving));
@@ -1180,7 +1187,7 @@ void Idle(float dt) {
 	}
 	jumpDown = sk::keys[sk::KEY_LSHIFT];
 	if (gWalk && gSwimming) {
-		float sp = 2.0f * dt; // ASSUMED swim speed (the swim clips are not loaded)
+		float sp = ClipSpeed(sk::keys[' '] ? "swim_crawl" : "swim_breast") * dt; // root motion of the swim clips: breast 2.32, crawl 2.78 m/s
 		if (sk::keys['W']) { camPos.x += fwd.x * sp; camPos.y += fwd.y * sp; }
 		if (sk::keys['S']) { camPos.x -= fwd.x * sp; camPos.y -= fwd.y * sp; }
 		if (sk::keys['D']) { camPos.x += right.x * sp; camPos.y += right.y * sp; }
