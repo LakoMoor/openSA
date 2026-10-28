@@ -663,6 +663,43 @@ void UpdateStreaming(double now) {
 	}
 }
 
+// Visible ped (walk mode). DEVIATIONS: the model is the generic male01 ped (CJ needs the clothes builder: player.dff + player.img parts),
+// drawn in its bind pose with no animation; the follow camera uses an assumed distance/height instead of CCam::Process_FollowPed_SA.
+rw::Clump *gPed = nil;
+constexpr float kPedFollowDist = 4.0f, kPedFollowUp = 0.8f;
+
+void EnsurePed() {
+	if (gPed) return;
+	const sa::ImgV2 &gta3 = gW.archives[0];
+	const sa::ImgEntry *ed = gta3.Find("male01.dff"), *et = gta3.Find("male01.txd");
+	std::vector<uint8_t> dff, txd;
+	if (!ed || !et || !gta3.Read(*ed, dff) || !gta3.Read(*et, txd)) { fprintf(gLog, "ped: male01 not found\n"); return; }
+	rw::TexDictionary *d = ReadTxd(txd);
+	gChain.clear();
+	if (d) gChain.push_back(d);
+	rw::TexDictionary::setCurrent(nil);
+	rw::Texture::findCB = FindInChain;
+	rw::StreamMemory sm;
+	sm.open(dff.data(), (rw::uint32)dff.size());
+	if (rw::findChunk(&sm, rw::ID_CLUMP, nil, nil)) gPed = rw::Clump::streamRead(&sm);
+	sm.close();
+	fprintf(gLog, "ped: male01 %s\n", gPed ? "loaded" : "failed");
+	if (gPed) gWorld->addClump(gPed);
+}
+
+void UpdatePed() {
+	const bool show = getenv("SA_PEDSHOW") != nullptr; // test aid: draw the ped 6 m ahead of the free camera
+	if (!gWalk && !show) { if (gPed) { gWorld->removeClump(gPed); gPed->destroy(); gPed = nil; } return; }
+	EnsurePed();
+	if (!gPed) return;
+	rw::V3d zaxis = {0, 0, 1};
+	rw::Frame *f = gPed->getFrame();
+	f->rotate(&zaxis, -camYaw, rw::COMBINEREPLACE);
+	rw::V3d feet = {camPos.x, camPos.y, camPos.z - 1.7f + 1.0f};
+	if (show && !gWalk) feet = {camPos.x + std::sin(camYaw * 0.0174533f) * 6.0f, camPos.y + std::cos(camYaw * 0.0174533f) * 6.0f, camPos.z - 2.0f}; // ped origin is 1.0 above the feet (verified); 1.7 = assumed eye height
+	f->translate(&feet, rw::COMBINEPOSTCONCAT);
+}
+
 void UpdateCamera() {
 	float yr = camYaw * 3.14159265f / 180.0f, pr = camPitch * 3.14159265f / 180.0f;
 	rw::V3d dir = {std::sin(yr) * std::cos(pr), std::cos(yr) * std::cos(pr), std::sin(pr)};
@@ -670,6 +707,11 @@ void UpdateCamera() {
 	rw::Frame *f = gCamera->getFrame();
 	f->matrix.lookAt(dir, up);
 	f->matrix.pos = camPos;
+	if (gWalk && gPed) { // third-person: back off along the view direction
+		f->matrix.pos.x -= dir.x * kPedFollowDist;
+		f->matrix.pos.y -= dir.y * kPedFollowDist;
+		f->matrix.pos.z -= dir.z * kPedFollowDist - kPedFollowUp;
+	}
 	f->matrix.update();
 	f->updateObjects();
 }
@@ -718,6 +760,7 @@ bool Initialize3D() {
 
 	camPos = {centerX - 30.0f, centerY - 30.0f, 40.0f};
 	camYaw = 45.0f;
+	UpdatePed();
 	UpdateCamera();
 	return true;
 }
