@@ -228,6 +228,8 @@ void UpdateWeatherRegion(float x, float y) {
 }
 sa::Timecyc gTimecyc;
 rw::Light *gAmbient = nil;
+rw::Light *gSunLight = nil;
+rw::V3d gToSun = {0.5f, -0.5f, 0.7f}; // unit vector from the world to the sun
 
 // timecyc sample + day/night balance for the current game time
 void ApplyTimeOfDay() {
@@ -249,6 +251,21 @@ void ApplyTimeOfDay() {
 		gCamera->setFarPlane(gFarClip);
 		gCamera->fogPlane = std::min(gTc.fogStart, gFarClip - 1.0f);
 		if (gAmbient) gAmbient->setColor(gTc.ambientObj[0] / 255.0f, gTc.ambientObj[1] / 255.0f, gTc.ambientObj[2] / 255.0f);
+	}
+	// CTimeCycle::Update (0x560A59, constants read from the exe): vector to the sun = normalise(0.7 + sin a, -0.7, 0.2 - cos a), a = minutes * pi / 720
+	{
+		float a = gGameMinutes * 3.14159265f / 720.0f;
+		rw::V3d v = {0.7f + std::sin(a), -0.7f, 0.2f - std::cos(a)};
+		float l = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+		gToSun = {v.x / l, v.y / l, v.z / l};
+		if (gSunLight) {
+			rw::V3d dir = {-gToSun.x, -gToSun.y, -gToSun.z}, up = {0, 0, 1};
+			rw::Frame *lf = gSunLight->getFrame();
+			lf->matrix.lookAt(dir, up);
+			lf->matrix.update();
+			lf->updateObjects();
+			if (gTc.ok) gSunLight->setColor(gTc.directional[0] / 255.0f, gTc.directional[1] / 255.0f, gTc.directional[2] / 255.0f);
+		}
 	}
 	// CCustomBuildingRenderer::UpdateDayNightBalanceParam (0x5D7F80); decompiled in the exe, curve identical
 	float m = gGameMinutes;
@@ -876,11 +893,9 @@ bool Initialize3D() {
 	rw::Light *sun = rw::Light::create(rw::Light::DIRECTIONAL);
 	sun->setColor(0.6f, 0.6f, 0.55f);
 	rw::Frame *sf = rw::Frame::create();
-	rw::V3d xa = {1, 0, 0}, ya = {0, 1, 0};
-	sf->rotate(&xa, 50.0f, rw::COMBINEREPLACE);
-	sf->rotate(&ya, 30.0f, rw::COMBINEPOSTCONCAT);
 	sun->setFrame(sf);
 	gWorld->addLight(sun);
+	gSunLight = sun;
 
 	auto t0 = std::chrono::steady_clock::now();
 	std::string err;
@@ -893,7 +908,8 @@ bool Initialize3D() {
 	fflush(gLog);
 
 	camPos = {centerX - 30.0f, centerY - 30.0f, 40.0f};
-	camYaw = 45.0f;
+	camYaw = getenv("SA_YAW") ? (float)atof(getenv("SA_YAW")) : 45.0f;
+	if (getenv("SA_PITCH")) camPitch = (float)atof(getenv("SA_PITCH"));
 	UpdatePed();
 	UpdateCamera();
 	return true;
@@ -917,6 +933,36 @@ bool AttachPlugins() {
 	gExtraVertOffset = rw::Geometry::registerPlugin(sizeof(ExtraVertColour), ID_EXTRAVERTCOLOUR, CreateExtraVert, DestroyExtraVert, nil);
 	rw::Geometry::registerPluginStream(ID_EXTRAVERTCOLOUR, ReadExtraVert, WriteExtraVert, SizeExtraVert);
 	return true;
+}
+
+// Sun: projected along the vector to the sun (verified formula), filled square in the timecyc core/corona colours.
+// DEVIATION: the real sun/corona are textured sprites from particle.txd with sizes from CClouds/CCoronas; sizes here are guesses.
+void DrawSunDisc(float W, float H, float tanHalf) {
+	rw::Matrix *m = &gCamera->getFrame()->matrix;
+	rw::V3d d = gToSun;
+	float cx = d.x * m->right.x + d.y * m->right.y + d.z * m->right.z, cy = d.x * m->up.x + d.y * m->up.y + d.z * m->up.z,
+	      cz = d.x * m->at.x + d.y * m->at.y + d.z * m->at.z;
+	if (cz <= 0.05f) return;
+	float aspect = W / H;
+	float sx = W * 0.5f + cx / cz / (tanHalf * aspect) * W * 0.5f, sy = H * 0.5f - cy / cz / tanHalf * H * 0.5f;
+	auto quad = [&](float half, const float *col, uint8_t alpha) {
+		rw::RWDEVICE::Im2DVertex v[4];
+		float xs[4] = {sx - half, sx + half, sx - half, sx + half}, ys[4] = {sy - half, sy - half, sy + half, sy + half};
+		float recipZ = 1.0f / gCamera->nearPlane;
+		for (int i = 0; i < 4; i++) {
+			v[i].setScreenX(xs[i]); v[i].setScreenY(ys[i]); v[i].setScreenZ(rw::im2d::GetNearZ());
+			v[i].setCameraZ(gCamera->nearPlane); v[i].setRecipCameraZ(recipZ);
+			v[i].setColor((uint8_t)col[0], (uint8_t)col[1], (uint8_t)col[2], alpha);
+			v[i].setU(0, recipZ); v[i].setV(0, recipZ);
+		}
+		rw::uint16 idx[6] = {0, 1, 2, 1, 3, 2};
+		rw::im2d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, v, 4, idx, 6);
+	};
+	rw::SetRenderState(rw::VERTEXALPHA, 1);
+	rw::SetRenderState(rw::SRCBLEND, rw::BLENDSRCALPHA);
+	rw::SetRenderState(rw::DESTBLEND, rw::BLENDINVSRCALPHA);
+	quad(H * 0.06f, gTc.sunCorona, 90);
+	quad(H * 0.025f, gTc.sunCore, 255);
 }
 
 // Sky gradient: timecyc sky-top colour at the top of the screen blending to sky-bottom at the horizon (the clear colour fills below it).
@@ -951,6 +997,7 @@ void DrawSky() {
 	rw::SetRenderState(rw::CULLMODE, rw::CULLNONE);
 	rw::SetRenderState(rw::FOGENABLE, 0);
 	rw::im2d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, v, 4, idx, 6);
+	DrawSunDisc(W, H, tanHalf);
 	rw::SetRenderState(rw::ZTESTENABLE, 1);
 	rw::SetRenderState(rw::ZWRITEENABLE, 1);
 	rw::SetRenderState(rw::CULLMODE, rw::CULLBACK);
