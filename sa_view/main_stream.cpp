@@ -501,6 +501,37 @@ bool GroundHeight(float x, float y, float zFrom, float maxDrop, float &outZ) {
 	return found;
 }
 
+// nearest hit of the ray o + t*d (d unit length) against the COL geometry of nearby instances within maxT; -1 when nothing is hit
+float RayCastWorld(const rw::V3d &o, const rw::V3d &d, float maxT) {
+	float best = maxT;
+	bool found = false;
+	for (int cx = CellOf(o.x) - 1; cx <= CellOf(o.x) + 1; cx++)
+		for (int cy = CellOf(o.y) - 1; cy <= CellOf(o.y) + 1; cy++) {
+			auto g = gGrid.find(CellKey(cx, cy));
+			if (g == gGrid.end()) continue;
+			for (int idx : g->second) {
+				const Inst &in = gInsts[idx];
+				if (!in.col || IsBigBuilding(in)) continue;
+				const float *bc = in.col->bound.center;
+				float reach = in.col->bound.radius + std::sqrt(bc[0] * bc[0] + bc[1] * bc[1] + bc[2] * bc[2]) + maxT + 1.0f;
+				float dx = in.pos.x - o.x, dy = in.pos.y - o.y, dz = in.pos.z - o.z;
+				if (dx * dx + dy * dy + dz * dz > reach * reach) continue;
+				rw::V3d lo = QuatRotate(in.rot, {o.x - in.pos.x, o.y - in.pos.y, o.z - in.pos.z}, true);
+				rw::V3d ld = QuatRotate(in.rot, d, true);
+				const std::vector<float> &vs = in.col->verts;
+				for (const sa::ColTri &t : in.col->tris) {
+					float h = RayTri(lo, ld, &vs[t.a * 3], &vs[t.b * 3], &vs[t.c * 3]);
+					if (h >= 0 && h < best) { best = h; found = true; }
+				}
+				for (const sa::ColBox &b : in.col->boxes) {
+					float h = RayBox(lo, ld, b);
+					if (h >= 0 && h < best) { best = h; found = true; }
+				}
+			}
+		}
+	return found ? best : -1.0f;
+}
+
 // closest point on triangle abc to p (Ericson, Real-Time Collision Detection 5.1.5)
 rw::V3d ClosestOnTri(const rw::V3d &p, const float *A, const float *B, const float *C) {
 	auto sub = [](const float *x, const float *y) { return rw::V3d{x[0] - y[0], x[1] - y[1], x[2] - y[2]}; };
@@ -666,8 +697,8 @@ void UpdateStreaming(double now) {
 	}
 }
 
-// Visible ped (walk mode). DEVIATIONS: the model is the generic male01 ped (CJ needs the clothes builder: player.dff + player.img parts),
-// drawn in its bind pose with no animation; the follow camera uses an assumed distance/height instead of CCam::Process_FollowPed_SA.
+// Visible ped (walk mode). DEVIATIONS: the model is the generic male01 ped (CJ needs the clothes builder: player.dff + player.img parts);
+// the follow camera uses an assumed distance/height instead of CCam::Process_FollowPed_SA, with a simple ray test against COL geometry.
 rw::Clump *gPed = nil;
 rw::HAnimHierarchy *gPedHier = nil;
 constexpr float kPedFollowDist = 4.0f, kPedFollowUp = 0.8f;
@@ -785,10 +816,14 @@ void UpdateCamera() {
 	rw::Frame *f = gCamera->getFrame();
 	f->matrix.lookAt(dir, up);
 	f->matrix.pos = camPos;
-	if (gWalk && gPed) { // third-person: back off along the view direction
-		f->matrix.pos.x -= dir.x * kPedFollowDist;
-		f->matrix.pos.y -= dir.y * kPedFollowDist;
-		f->matrix.pos.z -= dir.z * kPedFollowDist - kPedFollowUp;
+	if (gWalk && gPed) { // third-person: back off along the view direction, stopping short of geometry in between
+		rw::V3d back = {-dir.x, -dir.y, -dir.z};
+		rw::V3d pivot = {camPos.x, camPos.y, camPos.z + kPedFollowUp};
+		float dist = kPedFollowDist, hit = RayCastWorld(pivot, back, kPedFollowDist + 0.3f);
+		if (hit >= 0.0f) dist = std::max(0.3f, hit - 0.3f);
+		static int logged = 0;
+		if (logged++ % 120 == 0) fprintf(gLog, "follow camera: ray hit %.2f -> distance %.2f\n", hit, dist);
+		f->matrix.pos = {pivot.x + back.x * dist, pivot.y + back.y * dist, pivot.z + back.z * dist};
 	}
 	f->matrix.update();
 	f->updateObjects();
