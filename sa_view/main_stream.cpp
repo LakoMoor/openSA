@@ -673,13 +673,18 @@ void UpdateWalk(float dt) {
 	constexpr float kOriginAboveFeet = 1.0f, kGravity = 20.0f, kStep = 1.0f, kMaxDrop = 60.0f; // 1.0 verified (ped box min z), 20 = 0.008 @0x863984
 	float gz;
 	bool ground = GroundHeight(camPos.x, camPos.y, camPos.z - kOriginAboveFeet + kStep, kMaxDrop, gz);
-	// Swimming. DEVIATION: the entry rule is a guess (water deeper than 1.3 m over the ground); the original creates CTaskSimpleSwim from
-	// 0x68B050 (not reversed here). Height follows CTaskSimpleSwim::ProcessSwimmingResistance (0x68A1D0, constants read in the exe: 0.55 tread,
-	// 0.4 breast, 0.2 crawl, 0.65 surface test, 0.1 per tick clamp): equilibrium origin = waterLevel - 0.55 when treading. The 0.4/0.2 blends and
-	// the smoothing are not implemented (no clip blending), so moving also sits at the tread height.
+	// Swimming. Entry rule from CPed::ProcessBuoyancy (0x5E1FA0) + cBuoyancy::ProcessBuoyancy: immersion = clamp((waterLevel - z + 1) / 1.9),
+	// buoyancy = immersion * 1.1 * mass/125 per tick; CEventInWater (-> swim task) fires once buoyancy/mass > 1/125 per tick or z + 0.6 < waterLevel,
+	// i.e. origin z < waterLevel - 0.6 (the 1.1 factor alone gives -0.727, so the second test decides). Standing on ground that means water
+	// deeper than 1.6 m over the feet. Leaving: the ped stands again once the tread height (waterLevel - 0.55) is at or below ground + 1.0, so a
+	// swimming ped keeps swimming while depth > 1.55 (hysteresis follows from the equilibrium, not from CTaskSimpleSwim's m_fSwimStopTime,
+	// whose exit threshold is NOT reversed). Height follows CTaskSimpleSwim::ProcessSwimmingResistance (0x68A1D0, constants read in the exe:
+	// 0.55 tread, 0.4 breast, 0.2 crawl, 0.65 surface test, 0.1 per tick clamp). DEVIATION: the 0.4/0.2 blends and the smoothing are not
+	// implemented (no clip blending), so moving also sits at the tread height.
 	float wl;
 	// without loaded ground below, only an already-near-the-surface ped counts as swimming (water polygons also cover coastal land)
-	gSwimming = WaterLevelAt(camPos.x, camPos.y, wl) && (ground ? wl - gz > 1.3f : camPos.z <= wl + 2.0f);
+	bool inWater = WaterLevelAt(camPos.x, camPos.y, wl);
+	gSwimming = inWater && (ground ? (camPos.z < wl - 0.6f || (gSwimming && wl - gz > 1.55f)) : camPos.z <= wl + 2.0f);
 	if (gSwimming) {
 		float target = wl - 0.55f, dz = target - camPos.z, maxStep = 5.0f * dt;
 		camPos.z += std::max(-maxStep, std::min(maxStep, dz));
