@@ -22,6 +22,8 @@ public:
 	int NumWeathers() const { return (int)m_keys.size() / kHours; }
 	// Linear blend between the two keyframes around `hour` (0..24), wrapping 22:00 -> 00:00.
 	TimecycKey Sample(int weather, float hour) const;
+	// Weather transition: CWeather::Update (0x72B850) blends old->new weather by the fraction of the hour elapsed.
+	static TimecycKey Lerp(const TimecycKey &a, const TimecycKey &b, float t);
 
 private:
 	std::vector<TimecycKey> m_keys;

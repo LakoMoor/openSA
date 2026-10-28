@@ -200,14 +200,46 @@ void ApplyDayNight(rw::Clump *c) {
 // The value is runtime-set (0 in the exe image); 1000 is taken from gta-reversed. SA_CLOCK=0 freezes the clock.
 constexpr float kMsPerGameMinute = 1000.0f;
 float gGameMinutes = 12.0f * 60.0f; // minutes since midnight
-int gWeather = 0;
+// Weather: CWeather::Update (0x72B850) keeps old and new weather and blends them by the fraction of the hour elapsed; on each hour
+// rollover old = new and new = forecast table[region][index++ & 63] (tables at 0x8D5EB0, 64 bytes per region; region by position,
+// 0x72A640). Starting state from CWeather::Init (0x72A480): old = new = 0, region 0, index 0. SA_WEATHER forces one weather (ForceWeather).
+// DEVIATION: only the timecyc blend follows the weather; rain, fog banks, sandstorm, wet roads and lightning are not implemented.
+const uint8_t kForecast[5][64] = {
+	{13,13,13,13,13,13,13,13,14,15,9,9,15,14,13,14,14,13,13,13,13,14,14,13,13,13,13,13,13,13,13,13,13,13,14,14,14,14,14,14,15,9,9,15,16,16,16,16,15,14,14,14,14,13,13,13,13,13,13,13,13,13,13,13},
+	{2,2,0,0,0,2,2,2,3,0,3,2,0,0,3,3,3,4,4,0,0,1,1,0,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,2,2,3,3,0,0,16,0,4,1,1,1,1,0,0,2,2,2,2,2,2,2,2,2},
+	{5,5,5,5,5,7,7,9,9,7,5,5,5,5,5,7,7,7,8,8,7,7,5,5,5,5,6,6,5,7,9,9,7,5,5,7,5,5,6,6,5,5,5,7,7,8,8,7,7,9,9,5,5,6,6,6,5,5,6,7,7,6,6,5},
+	{11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,10,10,10,10,10,11,11,11,11,11,11,11,11,11,10,11,11,11,11,10,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,10,10,12,12,10,12,10,10},
+	{17,17,17,19,19,17,17,17,17,17,17,17,17,17,17,17,17,17,17,18,18,18,18,18,17,17,17,17,17,17,17,17,17,17,17,17,17,19,19,19,17,17,17,17,17,17,17,17,17,17,18,18,18,17,17,17,17,17,17,17,19,19,19,17},
+};
+int gWeather = 0, gOldWeather = 0, gForecastIdx = 0, gWeatherRegion = 0;
+bool gWeatherForced = false;
+float gWeatherPrevFrac = 0.0f;
+
+// CWeather::UpdateWeatherRegion (0x72A640): world rectangles -> forecast table (0 countryside, 1 LA, 2 SF, 3 LV, 4 desert)
+void UpdateWeatherRegion(float x, float y) {
+	if (x > 1000.0f && y > 910.0f) gWeatherRegion = 3;
+	else if (x > -850.0f && x < 1000.0f && y > 1280.0f) gWeatherRegion = 4;
+	else if (x < -1430.0f && y > -580.0f && y < 1430.0f) gWeatherRegion = 2;
+	else if (x <= 250.0f || x >= 3000.0f || y <= -3000.0f || y >= -850.0f) gWeatherRegion = 0;
+	else gWeatherRegion = 1;
+}
 sa::Timecyc gTimecyc;
 rw::Light *gAmbient = nil;
 
 // timecyc sample + day/night balance for the current game time
 void ApplyTimeOfDay() {
 	float hour = gGameMinutes / 60.0f;
-	gTc = gTimecyc.Sample(gWeather, hour);
+	float frac = std::fmod(gGameMinutes, 60.0f) / 60.0f;
+	if (!gWeatherForced && frac < gWeatherPrevFrac) {
+		UpdateWeatherRegion(camPos.x, camPos.y);
+		gOldWeather = gWeather;
+		gForecastIdx = (gForecastIdx + 1) & 63;
+		gWeather = kForecast[gWeatherRegion][gForecastIdx];
+		fprintf(gLog, "weather: %d -> %d (region %d, forecast slot %d)\n", gOldWeather, gWeather, gWeatherRegion, gForecastIdx);
+	}
+	gWeatherPrevFrac = frac;
+	gTc = gWeatherForced ? gTimecyc.Sample(gWeather, hour)
+	                     : sa::Timecyc::Lerp(gTimecyc.Sample(gOldWeather, hour), gTimecyc.Sample(gWeather, hour), frac);
 	if (gTc.ok) {
 		gFarClip = std::min(gTc.farClip, 1000.0f);
 		Background = {(uint8_t)gTc.skyBottom[0], (uint8_t)gTc.skyBottom[1], (uint8_t)gTc.skyBottom[2], 255};
@@ -654,7 +686,7 @@ bool Initialize3D() {
 	if (getenv("SA_WALK")) gWalk = atoi(getenv("SA_WALK")) != 0;
 	if (getenv("SA_FOV")) gFovDeg = (float)atof(getenv("SA_FOV"));
 	if (getenv("SA_HOUR")) gGameMinutes = (float)atof(getenv("SA_HOUR")) * 60.0f;
-	if (getenv("SA_WEATHER")) gWeather = atoi(getenv("SA_WEATHER"));
+	if (getenv("SA_WEATHER")) { gWeather = gOldWeather = atoi(getenv("SA_WEATHER")); gWeatherForced = true; }
 	gTimecyc.Load(gameDir + "/data/timecyc.dat");
 	gCamera->setFOV(gFovDeg, (float)sk::globals.width / sk::globals.height);
 	gWorld->addCamera(gCamera);

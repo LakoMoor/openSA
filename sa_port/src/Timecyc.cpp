@@ -78,4 +78,20 @@ TimecycKey Timecyc::Sample(int weather, float hour) const {
 	return out;
 }
 
+TimecycKey Timecyc::Lerp(const TimecycKey &a, const TimecycKey &b, float t) {
+	TimecycKey o{};
+	auto mix = [&](const float *x, const float *y, float *r) { for (int i = 0; i < 3; i++) r[i] = x[i] + (y[i] - x[i]) * t; };
+	mix(a.ambient, b.ambient, o.ambient);
+	mix(a.ambientObj, b.ambientObj, o.ambientObj);
+	mix(a.directional, b.directional, o.directional);
+	mix(a.skyTop, b.skyTop, o.skyTop);
+	mix(a.skyBottom, b.skyBottom, o.skyBottom);
+	mix(a.sunCore, b.sunCore, o.sunCore);
+	mix(a.sunCorona, b.sunCorona, o.sunCorona);
+	o.farClip = a.farClip + (b.farClip - a.farClip) * t;
+	o.fogStart = a.fogStart + (b.fogStart - a.fogStart) * t;
+	o.ok = a.ok && b.ok;
+	return o;
+}
+
 } // namespace sa
