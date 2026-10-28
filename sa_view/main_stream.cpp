@@ -146,6 +146,51 @@ void DestroyProto(int id, ModelState &ms) {
 	if (txd >= 0) ReleaseTxdChain(txd);
 }
 
+// "Extra Vert Colour" geometry plugin (id 0x253F2F9, CCustomBuildingDNPipeline 0x5D6DE0): u32 flag, then numVerts RGBA night colours.
+// The day colours are the geometry's own pre-lit colours.
+struct ExtraVertColour { rw::RGBA *night; };
+int gExtraVertOffset = -1;
+constexpr rw::uint32 ID_EXTRAVERTCOLOUR = 0x253F2F9;
+float gDayNightBalance = 0.0f; // 0 = day colours, 1 = night colours (CCustomBuildingDNPipeline::m_fDNBalanceParam)
+
+void *CreateExtraVert(void *obj, rw::int32 off, rw::int32) { PLUGINOFFSET(ExtraVertColour, obj, off)->night = nil; return obj; }
+void *DestroyExtraVert(void *obj, rw::int32 off, rw::int32) {
+	ExtraVertColour *e = PLUGINOFFSET(ExtraVertColour, obj, off);
+	free(e->night);
+	e->night = nil;
+	return obj;
+}
+rw::Stream *ReadExtraVert(rw::Stream *st, rw::int32 len, void *obj, rw::int32 off, rw::int32) {
+	rw::Geometry *g = (rw::Geometry *)obj;
+	rw::uint32 flag = 0;
+	st->read32(&flag, 4);
+	size_t bytes = (size_t)g->numVertices * 4;
+	if (flag && len >= (rw::int32)(4 + bytes)) {
+		ExtraVertColour *e = PLUGINOFFSET(ExtraVertColour, obj, off);
+		e->night = (rw::RGBA *)malloc(bytes);
+		st->read8(e->night, (rw::uint32)bytes);
+		len -= (rw::int32)(4 + bytes);
+	} else
+		len -= 4;
+	if (len > 0) st->seek(len);
+	return st;
+}
+rw::Stream *WriteExtraVert(rw::Stream *st, rw::int32, void *, rw::int32, rw::int32) { return st; }
+rw::int32 SizeExtraVert(void *, rw::int32, rw::int32) { return 0; }
+
+// lerp(day, night, balance) written into the geometry's colours; called once per prototype
+void ApplyDayNight(rw::Clump *c) {
+	FORLIST(lnk, c->atomics) {
+		rw::Geometry *g = rw::Atomic::fromClump(lnk)->geometry;
+		ExtraVertColour *e = PLUGINOFFSET(ExtraVertColour, g, gExtraVertOffset);
+		if (!e->night || !g->colors) continue;
+		for (int i = 0; i < g->numVertices; i++) {
+			rw::uint8 *d = (rw::uint8 *)&g->colors[i], *n = (rw::uint8 *)&e->night[i];
+			for (int k = 0; k < 3; k++) d[k] = (rw::uint8)(d[k] + (n[k] - d[k]) * gDayNightBalance);
+		}
+	}
+}
+
 // Builds the prototype once the model bytes and its whole TXD chain are in memory.
 void TryBuild(int id, ModelState &ms) {
 	const std::vector<uint8_t> *b = gStreamer->Data(id);
@@ -162,6 +207,7 @@ void TryBuild(int id, ModelState &ms) {
 	s.open(const_cast<uint8_t *>(b->data()), (rw::uint32)b->size());
 	if (rw::findChunk(&s, rw::ID_CLUMP, nil, nil)) ms.proto = rw::Clump::streamRead(&s);
 	s.close();
+	if (ms.proto) ApplyDayNight(ms.proto);
 	if (!ms.proto) ms.failed = true;
 	else if (txd >= 0)
 		for (int t : TxdChain(txd)) gTxdUsers[t]++;
@@ -397,6 +443,12 @@ bool Initialize3D() {
 		fprintf(gLog, "timecyc: hour %.1f weather %d ok=%d farClip=%.0f fogStart=%.0f sky bottom=(%.0f,%.0f,%.0f)\n", hour, weather, (int)gTc.ok, gFarClip,
 		        gTc.fogStart, gTc.skyBottom[0], gTc.skyBottom[1], gTc.skyBottom[2]);
 	}
+	{
+		// CCustomBuildingRenderer::UpdateDayNightBalanceParam (0x5D7F80); shape taken from gta-reversed (not re-verified in the exe)
+		float hour = getenv("SA_HOUR") ? (float)atof(getenv("SA_HOUR")) : 12.0f, m = hour * 60.0f;
+		gDayNightBalance = m < 360.0f ? 1.0f : m < 420.0f ? (420.0f - m) / 60.0f : m < 1200.0f ? 0.0f : m >= 1260.0f ? 1.0f : 1.0f - (1260.0f - m) / 60.0f;
+		fprintf(gLog, "day/night balance %.2f\n", gDayNightBalance);
+	}
 	gCamera->setFarPlane(gFarClip);
 	gCamera->fogPlane = gTc.ok ? std::min(gTc.fogStart, gFarClip - 1.0f) : gFarClip * 0.5f;
 	gCamera->setFOV(kFovDeg, (float)sk::globals.width / sk::globals.height);
@@ -446,6 +498,8 @@ bool AttachPlugins() {
 	rw::registerHAnimPlugin();
 	rw::registerMatFXPlugin();
 	rw::registerUVAnimPlugin();
+	gExtraVertOffset = rw::Geometry::registerPlugin(sizeof(ExtraVertColour), ID_EXTRAVERTCOLOUR, CreateExtraVert, DestroyExtraVert, nil);
+	rw::Geometry::registerPluginStream(ID_EXTRAVERTCOLOUR, ReadExtraVert, WriteExtraVert, SizeExtraVert);
 	return true;
 }
 
