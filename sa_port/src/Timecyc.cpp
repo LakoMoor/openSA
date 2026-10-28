@@ -31,7 +31,7 @@ bool Timecyc::Load(const std::string &path) {
 				k.sunCore[i] = (float)v[15 + i];
 				k.sunCorona[i] = (float)v[18 + i];
 			}
-			float a, b, c, farClip, fogStart;
+			float a, b, c, farClip, fogStart, rest[11] = {};
 			int s0, s1, s2;
 			// skip the 21 ints, then read the remaining columns
 			const char *q = p;
@@ -39,7 +39,10 @@ bool Timecyc::Load(const std::string &path) {
 				while (*q == ' ' || *q == '\t') q++;
 				while (*q && *q != ' ' && *q != '\t') q++;
 			}
-			if (sscanf(q, "%f %f %f %d %d %d %f %f", &a, &b, &c, &s0, &s1, &s2, &farClip, &fogStart) == 8) {
+			if (sscanf(q, "%f %f %f %d %d %d %f %f %f %f %f %f %f %f %f %f %f %f %f", &a, &b, &c, &s0, &s1, &s2, &farClip, &fogStart, rest, rest + 1, rest + 2, rest + 3,
+			           rest + 4, rest + 5, rest + 6, rest + 7, rest + 8, rest + 9, rest + 10) >= 8) {
+				// after fogStart: lightOnGround, low cloud rgb, bottom cloud rgb, water rgb + alpha (column order from CTimeCycle::Initialise)
+				for (int i = 0; i < 4; i++) k.water[i] = rest[7 + i];
 				k.farClip = farClip;
 				k.fogStart = fogStart;
 				k.ok = true;
@@ -72,6 +75,7 @@ TimecycKey Timecyc::Sample(int weather, float hour) const {
 	mix(A.skyBottom, B.skyBottom, out.skyBottom);
 	mix(A.sunCore, B.sunCore, out.sunCore);
 	mix(A.sunCorona, B.sunCorona, out.sunCorona);
+	for (int i = 0; i < 4; i++) out.water[i] = A.water[i] + (B.water[i] - A.water[i]) * t;
 	out.farClip = A.farClip + (B.farClip - A.farClip) * t;
 	out.fogStart = A.fogStart + (B.fogStart - A.fogStart) * t;
 	out.ok = A.ok && B.ok;
@@ -88,6 +92,7 @@ TimecycKey Timecyc::Lerp(const TimecycKey &a, const TimecycKey &b, float t) {
 	mix(a.skyBottom, b.skyBottom, o.skyBottom);
 	mix(a.sunCore, b.sunCore, o.sunCore);
 	mix(a.sunCorona, b.sunCorona, o.sunCorona);
+	for (int i = 0; i < 4; i++) o.water[i] = a.water[i] + (b.water[i] - a.water[i]) * t;
 	o.farClip = a.farClip + (b.farClip - a.farClip) * t;
 	o.fogStart = a.fogStart + (b.fogStart - a.fogStart) * t;
 	o.ok = a.ok && b.ok;

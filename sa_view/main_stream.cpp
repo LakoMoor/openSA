@@ -1009,6 +1009,7 @@ bool Initialize3D() {
 	amb->setColor(0.65f, 0.65f, 0.7f);
 	gAmbient = amb;
 	ApplyTimeOfDay();
+	fprintf(gLog, "timecyc water rgba %.0f %.0f %.0f %.0f\n", gTc.water[0], gTc.water[1], gTc.water[2], gTc.water[3]);
 	fprintf(gLog, "timecyc: minute-of-day %.0f weather %d ok=%d farClip=%.0f fogStart=%.0f\n", gGameMinutes, gWeather, (int)gTc.ok, gFarClip, gTc.fogStart);
 	gWorld->addLight(amb);
 	rw::Light *sun = rw::Light::create(rw::Light::DIRECTIONAL);
@@ -1135,6 +1136,8 @@ void DrawWater() {
 		bool ok = sa::LoadWaterDat(gameDir + "/data/water.dat", gWater);
 		fprintf(gLog, "water.dat: %zu polygons (%s)\n", gWater.size(), ok ? "ok" : "failed");
 	}
+	// colour/alpha from the timecyc water columns; DEVIATION: the original modulates its water texture with this and adds waves
+	rw::uint8 wr = (rw::uint8)gTc.water[0], wg = (rw::uint8)gTc.water[1], wb = (rw::uint8)gTc.water[2], wa = (rw::uint8)std::min(255.0f, gTc.water[3]);
 	std::vector<rw::RWDEVICE::Im3DVertex> verts;
 	std::vector<rw::uint16> idx;
 	for (const sa::WaterPoly &w : gWater) {
@@ -1148,7 +1151,7 @@ void DrawWater() {
 		for (int i = 0; i < w.n; i++) {
 			rw::RWDEVICE::Im3DVertex v;
 			v.setX(w.x[i]); v.setY(w.y[i]); v.setZ(w.z[i]);
-			v.setColor(40, 80, 100, 170);
+			v.setColor(wr, wg, wb, wa);
 			v.setU(0); v.setV(0);
 			verts.push_back(v);
 		}
