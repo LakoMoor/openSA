@@ -281,9 +281,12 @@ double gNextLog = 0;
 int gLoadedModels = 0;
 
 // CRenderer::SetupMapEntityVisibility (0x553F60), distance part. Differences from the original:
-// colModel radius comes from the COL headers in gta3.img (models without a record get 0), lodDistMultiplier is 1 (original: from camera FOV), the "big building" flag
+// colModel radius comes from the COL headers in gta3.img (models without a record get 0), lodDistMultiplier follows CCamera::Process (FOV assumed 70), the "big building" flag
 // is approximated by "LOD parent of other instances", no occlusion/tunnel/on-screen test, no alpha fade.
-constexpr float kFading = 20.0f, kStreamMargin = 50.0f, kLowLodDistance = 150.0f, kLodDistMult = 1.0f, kLowLodDistScale = 1.0f;
+constexpr float kFading = 20.0f, kStreamMargin = 50.0f, kLowLodDistance = 150.0f, kLowLodDistScale = 1.0f;
+// CCamera::Process (0x52B730): m_fLODDistMultiplier = ms_lodDistScale (0x8CD800 = 1.2) * 70 / CDraw::ms_fFOV (0x8D5038, 45 in the exe image),
+// or 1.0 while the flags at 0xB5F851/0xB5F853 select the other branch. ASSUMPTION: the game runs with FOV 70, as this viewer does.
+constexpr float kFovDeg = 70.0f, kLodDistScale = 1.2f, kLodDistMult = kLodDistScale * 70.0f / kFovDeg;
 
 float DrawLimit(const Inst &in, float &fading) {
 	float farClip = gFarClip;
@@ -393,7 +396,7 @@ bool Initialize3D() {
 	}
 	gCamera->setFarPlane(gFarClip);
 	gCamera->fogPlane = gTc.ok ? std::min(gTc.fogStart, gFarClip - 1.0f) : gFarClip * 0.5f;
-	gCamera->setFOV(70.0f, (float)sk::globals.width / sk::globals.height);
+	gCamera->setFOV(kFovDeg, (float)sk::globals.width / sk::globals.height);
 	gWorld->addCamera(gCamera);
 
 	rw::Light *amb = rw::Light::create(rw::Light::AMBIENT);
@@ -508,7 +511,7 @@ sk::EventStatus AppEventHandler(sk::Event e, void *param) {
 		sk::globals.height = r->h;
 		if (gCamera) {
 			sk::CameraSize(gCamera, r);
-			gCamera->setFOV(70.0f, (float)r->w / r->h);
+			gCamera->setFOV(kFovDeg, (float)r->w / r->h);
 		}
 		break;
 	}
