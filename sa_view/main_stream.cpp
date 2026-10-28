@@ -624,14 +624,14 @@ bool PushOutSphere(rw::V3d &c, float r) {
 }
 
 // ped collision model, verified at 0x5BAB5C (CTempColModels): 3 spheres r=0.35 at z -0.2/0.2/0.6 about the ped origin, which is 1.0 above
-// the feet (box min z = -1.0). kEye (camera above feet) is still ASSUMED.
+// the feet (box min z = -1.0). In walk mode camPos IS the ped origin (the camera itself is the third-person follow camera).
 void CollideWalker() {
-	constexpr float kRadius = 0.35f, kEye = 1.7f;
-	const float heights[3] = {0.8f, 1.2f, 1.6f}; // above the feet
+	constexpr float kRadius = 0.35f;
+	const float heights[3] = {-0.2f, 0.2f, 0.6f}; // relative to the ped origin
 	for (int iter = 0; iter < 3; iter++) {
 		bool any = false;
 		for (float h : heights) {
-			rw::V3d c = {camPos.x, camPos.y, camPos.z - kEye + h};
+			rw::V3d c = {camPos.x, camPos.y, camPos.z + h};
 			if (PushOutSphere(c, kRadius)) { camPos.x = c.x; camPos.y = c.y; any = true; }
 		}
 		if (!any) break;
@@ -644,11 +644,11 @@ bool gWalk = false;
 float gVelZ = 0.0f;
 
 void UpdateWalk(float dt) {
-	constexpr float kEye = 1.7f, kGravity = 20.0f, kStep = 1.0f, kMaxDrop = 60.0f;
+	constexpr float kOriginAboveFeet = 1.0f, kGravity = 20.0f, kStep = 1.0f, kMaxDrop = 60.0f; // 1.0 verified (ped box min z), 20 = 0.008 @0x863984
 	float gz;
-	bool ground = GroundHeight(camPos.x, camPos.y, camPos.z - kEye + kStep, kMaxDrop, gz);
+	bool ground = GroundHeight(camPos.x, camPos.y, camPos.z - kOriginAboveFeet + kStep, kMaxDrop, gz);
 	if (!ground) { gVelZ = 0.0f; return; } // no collision loaded here (yet): hold the height
-	float floorZ = gz + kEye;
+	float floorZ = gz + kOriginAboveFeet;
 	if (camPos.z > floorZ + 0.02f) {
 		gVelZ -= kGravity * dt;
 		camPos.z += gVelZ * dt;
@@ -719,7 +719,7 @@ void UpdateStreaming(double now) {
 // The ped is one or more skinned clumps that share the same animation (CJ: one per body part, each with its own copy of the skeleton).
 struct PedPart { rw::Clump *clump = nil; rw::HAnimHierarchy *hier = nil; };
 std::vector<PedPart> gPedParts;
-constexpr float kPedFollowDist = 4.0f, kPedFollowUp = 0.8f;
+constexpr float kPedFollowDist = 4.0f, kPedFollowUp = 1.5f; // ASSUMED, above the ped origin
 
 // ped.ifp animation on the ped's hierarchy. Rotation keys replace the bone's local rotation, translation keys (root only) its position.
 // Key quaternions are used as stored (checked visually: conjugating them lays the ped on its side). ASSUMED: bones without a translation
@@ -893,12 +893,12 @@ void UpdatePed() {
 	if (!gWalk && !show) { DestroyPed(); return; }
 	EnsurePed();
 	rw::V3d zaxis = {0, 0, 1};
-	rw::V3d feet = {camPos.x, camPos.y, camPos.z - 1.7f + 1.0f}; // ped origin is 1.0 above the feet (verified); 1.7 = assumed eye height
-	if (show && !gWalk) feet = {camPos.x + std::sin(camYaw * 0.0174533f) * 6.0f, camPos.y + std::cos(camYaw * 0.0174533f) * 6.0f, camPos.z - 2.0f};
+	rw::V3d origin = {camPos.x, camPos.y, camPos.z}; // camPos is the ped origin (1.0 above the feet, verified)
+	if (show && !gWalk) origin = {camPos.x + std::sin(camYaw * 0.0174533f) * 6.0f, camPos.y + std::cos(camYaw * 0.0174533f) * 6.0f, camPos.z - 2.0f};
 	for (PedPart &p : gPedParts) {
 		rw::Frame *f = p.clump->getFrame();
 		f->rotate(&zaxis, -camYaw, rw::COMBINEREPLACE);
-		f->translate(&feet, rw::COMBINEPOSTCONCAT);
+		f->translate(&origin, rw::COMBINEPOSTCONCAT);
 	}
 }
 
