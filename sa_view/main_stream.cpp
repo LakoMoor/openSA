@@ -282,11 +282,14 @@ int gLoadedModels = 0;
 
 // CRenderer::SetupMapEntityVisibility (0x553F60), distance part. Differences from the original:
 // colModel radius comes from the COL headers in gta3.img (models without a record get 0), lodDistMultiplier follows CCamera::Process (FOV assumed 70), the "big building" flag
-// is approximated by "LOD parent of other instances", no occlusion/tunnel/on-screen test, no alpha fade.
+// follows CFileLoader but uses the final multiplier (the original uses the one at load time), no occlusion/tunnel/on-screen test, no alpha fade.
 constexpr float kFading = 20.0f, kStreamMargin = 50.0f, kLowLodDistance = 150.0f, kLowLodDistScale = 1.0f;
 // CCamera::Process (0x52B730): m_fLODDistMultiplier = ms_lodDistScale (0x8CD800 = 1.2) * 70 / CDraw::ms_fFOV (0x8D5038, 45 in the exe image),
 // or 1.0 while the flags at 0xB5F851/0xB5F853 select the other branch. ASSUMPTION: the game runs with FOV 70, as this viewer does.
 constexpr float kFovDeg = 70.0f, kLodDistScale = 1.2f, kLodDistMult = kLodDistScale * 70.0f / kFovDeg;
+
+// CFileLoader (0x5B51E0, decompiled): SetupBigBuilding is called for an instance with LOD children or lodMult * drawDist > 300.
+bool IsBigBuilding(const Inst &in) { return in.numLodChildren > 0 || kLodDistMult * in.drawDist > 300.0f; }
 
 float DrawLimit(const Inst &in, float &fading) {
 	float farClip = gFarClip;
@@ -295,7 +298,7 @@ float DrawLimit(const Inst &in, float &fading) {
 	if (in.lodParent < 0) {
 		float f = std::min(in.drawDist, d);
 		if (f > kLowLodDistance) fading = f / 15.0f + 10.0f;
-		if (in.numLodChildren > 0) d *= kLowLodDistScale;
+		if (IsBigBuilding(in)) d *= kLowLodDistScale;
 	}
 	return d;
 }

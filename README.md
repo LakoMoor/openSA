@@ -22,7 +22,7 @@ Early stage. This is a data and streaming layer plus viewers, not a playable gam
 | Streamer (request / load / remove, model → TXD → parent TXD chain) | done (synchronous, no loading channels or memory budget yet) |
 | `sa_stream`: whole-map viewer that streams models and textures around a free camera, with LOD | done; distance/LOD rule follows `SetupMapEntityVisibility` (colModel radius from COL headers; no occlusion, tunnels or fade yet) |
 | Vehicles: palette paint, wheels | partial: stock wheel per car and right-wheel orientation unverified |
-| Real `CRenderer` visibility/LOD rules | distance part done; big-building flag, culling pending; LOD multiplier follows `CCamera::Process` (FOV assumed 70) |
+| Real `CRenderer` visibility/LOD rules | distance part done; culling pending; big-building rule from `CFileLoader`; LOD multiplier follows `CCamera::Process` (FOV assumed 70) |
 | Time of day: `timecyc.dat` parsed, sky colour, fog, far clip and ambient follow `SA_HOUR` / `SA_WEATHER` (no sky dome, no per-vertex day/night lighting, no weather changes) | partial |
 | Vehicle reflections, collision physics, peds, traffic, scripts, audio | not started |
 
