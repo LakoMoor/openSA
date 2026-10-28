@@ -9,6 +9,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -18,6 +20,7 @@
 #include "BinaryIpl.h"
 #include "ColBounds.h"
 #include "Timecyc.h"
+#include "IfpAnim.h"
 #include "Streamer.h"
 #include "StreamingWorld.h"
 
@@ -666,7 +669,71 @@ void UpdateStreaming(double now) {
 // Visible ped (walk mode). DEVIATIONS: the model is the generic male01 ped (CJ needs the clothes builder: player.dff + player.img parts),
 // drawn in its bind pose with no animation; the follow camera uses an assumed distance/height instead of CCam::Process_FollowPed_SA.
 rw::Clump *gPed = nil;
+rw::HAnimHierarchy *gPedHier = nil;
 constexpr float kPedFollowDist = 4.0f, kPedFollowUp = 0.8f;
+
+// ped.ifp animation on the ped's hierarchy. Rotation keys replace the bone's local rotation, translation keys (root only) its position.
+// Key quaternions are used as stored (checked visually: conjugating them lays the ped on its side). ASSUMED: bones without a translation
+// key keep their bind position.
+std::unordered_map<std::string, sa::IfpAnim> gAnims;
+const sa::IfpAnim *gPedAnim = nil;
+std::vector<rw::V3d> gBindPos;
+float gAnimTime = 0.0f;
+
+void LoadPedAnims() {
+	std::ifstream f(gameDir + "/anim/ped.ifp", std::ios::binary);
+	std::vector<uint8_t> b((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+	size_t n = sa::ParseIfp(b, gAnims);
+	fprintf(gLog, "ped.ifp: %zu animations\n", n);
+	auto it = gAnims.find("idle_stance");
+	gPedAnim = it != gAnims.end() ? &it->second : nil;
+}
+
+rw::Quat SampleQuat(const std::vector<sa::IfpKey> &k, float t) {
+	size_t i = 0;
+	while (i + 1 < k.size() && k[i + 1].time <= t) i++;
+	const sa::IfpKey &a = k[i], &b = k[std::min(i + 1, k.size() - 1)];
+	float u = b.time > a.time ? std::min(1.0f, std::max(0.0f, (t - a.time) / (b.time - a.time))) : 0.0f;
+	float dot = a.q[0] * b.q[0] + a.q[1] * b.q[1] + a.q[2] * b.q[2] + a.q[3] * b.q[3], sgn = dot < 0 ? -1.0f : 1.0f;
+	rw::Quat q;
+	q.x = a.q[0] + (sgn * b.q[0] - a.q[0]) * u; q.y = a.q[1] + (sgn * b.q[1] - a.q[1]) * u;
+	q.z = a.q[2] + (sgn * b.q[2] - a.q[2]) * u; q.w = a.q[3] + (sgn * b.q[3] - a.q[3]) * u;
+	float l = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+	if (l > 0) { q.x /= l; q.y /= l; q.z /= l; q.w /= l; }
+	return q;
+}
+
+void SelectPedAnim(const char *name) {
+	auto it = gAnims.find(name);
+	if (it != gAnims.end() && gPedAnim != &it->second) { gPedAnim = &it->second; gAnimTime = 0.0f; }
+}
+
+void AnimatePed(float dt) {
+	// DEVIATION: the original blends clips through the ped task system; this just switches between idle / walk / run
+	bool moving = sk::keys['W'] || sk::keys['A'] || sk::keys['S'] || sk::keys['D'];
+	SelectPedAnim(!moving ? "idle_stance" : sk::keys[sk::KEY_LSHIFT] ? "run_player" : "walk_player");
+	if (!gPed || !gPedHier || !gPedAnim || gPedAnim->duration <= 0) return;
+	gAnimTime = std::fmod(gAnimTime + dt, gPedAnim->duration);
+	for (const sa::IfpSeq &sq : gPedAnim->seqs) {
+		int ni = gPedHier->getIndex(sq.boneTag);
+		if (ni < 0 || sq.keys.empty()) continue;
+		rw::Frame *fr = gPedHier->nodeInfo[ni].frame;
+		if (!fr) continue;
+		rw::Quat q = SampleQuat(sq.keys, gAnimTime);
+		rw::Matrix m;
+		rw::Matrix::makeRotation(&m, q);
+		fr->matrix.right = m.right; fr->matrix.up = m.up; fr->matrix.at = m.at;
+		if (sq.hasTrans) {
+			const sa::IfpKey &k = sq.keys[0];
+			fr->matrix.pos = {k.t[0], k.t[1], k.t[2]};
+		}
+		fr->matrix.update();
+	}
+	gPed->getFrame()->updateObjects();
+	// the hierarchy has no interpolator (updateMatrices would crash), so take the bone matrices straight from the frames' LTMs
+	for (int i = 0; i < gPedHier->numNodes; i++)
+		if (gPedHier->nodeInfo[i].frame) gPedHier->matrices[i] = *gPedHier->nodeInfo[i].frame->getLTM();
+}
 
 void EnsurePed() {
 	if (gPed) return;
@@ -684,12 +751,23 @@ void EnsurePed() {
 	if (rw::findChunk(&sm, rw::ID_CLUMP, nil, nil)) gPed = rw::Clump::streamRead(&sm);
 	sm.close();
 	fprintf(gLog, "ped: male01 %s\n", gPed ? "loaded" : "failed");
-	if (gPed) gWorld->addClump(gPed);
+	if (gPed) {
+		gWorld->addClump(gPed);
+		gPedHier = rw::HAnimHierarchy::find(gPed->getFrame());
+		fprintf(gLog, "ped: hierarchy %s (%d nodes, flags %x, matrices %p, interp %p)\n", gPedHier ? "found" : "missing", gPedHier ? gPedHier->numNodes : 0,
+		        gPedHier ? gPedHier->flags : 0, gPedHier ? (void *)gPedHier->matrices : nullptr, gPedHier ? (void *)gPedHier->interpolator : nullptr);
+		if (gPedHier) gPedHier->attach(); // binds each node to the frame with the same hanim id
+		if (gPedHier) FORLIST(lnk, gPed->atomics) {
+			rw::Atomic *at = rw::Atomic::fromClump(lnk);
+			if (rw::Skin::get(at->geometry)) rw::Skin::setHierarchy(at, gPedHier);
+		}
+		if (gAnims.empty()) LoadPedAnims();
+	}
 }
 
 void UpdatePed() {
 	const bool show = getenv("SA_PEDSHOW") != nullptr; // test aid: draw the ped 6 m ahead of the free camera
-	if (!gWalk && !show) { if (gPed) { gWorld->removeClump(gPed); gPed->destroy(); gPed = nil; } return; }
+	if (!gWalk && !show) { if (gPed) { gWorld->removeClump(gPed); gPed->destroy(); gPed = nil; gPedHier = nil; } return; }
 	EnsurePed();
 	if (!gPed) return;
 	rw::V3d zaxis = {0, 0, 1};
@@ -809,6 +887,8 @@ void Idle(float dt) {
 	if (!(getenv("SA_CLOCK") && atoi(getenv("SA_CLOCK")) == 0)) gGameMinutes = std::fmod(gGameMinutes + dt * 1000.0f / kMsPerGameMinute, 1440.0f);
 	ApplyTimeOfDay();
 	UpdateStreaming(now);
+	UpdatePed();
+	AnimatePed(dt);
 	UpdateCamera();
 	gCamera->clear(&Background, rw::Camera::CLEARIMAGE | rw::Camera::CLEARZ);
 	gCamera->beginUpdate();
