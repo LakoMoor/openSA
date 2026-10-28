@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "BinaryIpl.h"
+#include "ColBounds.h"
 #include "Streamer.h"
 #include "StreamingWorld.h"
 
@@ -28,6 +29,7 @@ struct Inst {
 	rw::V3d pos;
 	rw::Quat rot;
 	rw::Clump *clump = nil;
+	float colRadius = 0;     // bound radius from the model's COL record (CColModel +0x24 radius)
 	float drawDist = 0;      // ObjectDef draw distance (first of the IDE distances)
 	int lodParent = -1;      // instance that stands in for this one at a distance
 	int numLodChildren = 0;  // instances that reference this one as their LOD (CEntity +0x34)
@@ -167,7 +169,22 @@ const float kMaxRange = 1000.0f;
 
 // Text IPLs come first in a "name -> local index -> global index" table because the binary streaming IPLs
 // (X_streamN) reference their LOD parent by index into the text IPL X (CIplStore::LoadIpl, see BinaryIpl.h).
+std::unordered_map<std::string, sa::ColBound> gColBounds; // lower-case model name -> COL bound
+
+void LoadColBounds() {
+	const sa::ImgV2 &gta3 = gW.archives[0];
+	size_t files = 0;
+	for (auto &e : gta3.Entries()) {
+		auto dot = e.name.rfind('.');
+		if (dot == std::string::npos || Lower(e.name.substr(dot)) != ".col") continue;
+		std::vector<uint8_t> buf;
+		if (gta3.Read(e, buf)) { sa::ParseColBounds(buf.data(), buf.size(), gColBounds); files++; }
+	}
+	fprintf(gLog, "COL bounds: %zu models from %zu files\n", gColBounds.size(), files);
+}
+
 void CollectPlacements() {
+	LoadColBounds();
 	std::unordered_map<std::string, std::vector<int>> localToGlobal; // lower-case IPL name -> global idx or -1
 	auto add = [&](int id, float x, float y, float z, const float q[4], uint32_t interiorByte) -> int {
 		if (interiorByte) return -1;
@@ -179,6 +196,8 @@ void CollectPlacements() {
 		i.pos = {x, y, z};
 		i.rot = {-q[0], -q[1], -q[2], q[3]}; // IPL quaternions are stored conjugated
 		i.drawDist = d->drawDist[0];
+		auto cb = gColBounds.find(Lower(d->model));
+		if (cb != gColBounds.end()) i.colRadius = cb->second.radius;
 		int idx = (int)gInsts.size();
 		gGrid[CellKey(CellOf(x), CellOf(y))].push_back(idx);
 		gInsts.push_back(i);
@@ -259,13 +278,13 @@ double gNextLog = 0;
 int gLoadedModels = 0;
 
 // CRenderer::SetupMapEntityVisibility (0x553F60), distance part. Differences from the original:
-// colModel radius is 0 (COL not loaded), lodDistMultiplier is 1 (original: from camera FOV), the "big building" flag
+// colModel radius comes from the COL headers in gta3.img (models without a record get 0), lodDistMultiplier is 1 (original: from camera FOV), the "big building" flag
 // is approximated by "LOD parent of other instances", no occlusion/tunnel/on-screen test, no alpha fade.
 constexpr float kFading = 20.0f, kStreamMargin = 50.0f, kLowLodDistance = 150.0f, kLodDistMult = 1.0f, kLowLodDistScale = 1.0f;
 
 float DrawLimit(const Inst &in, float &fading) {
 	float farClip = loadRadius * 1.2f;
-	float d = std::min(kLodDistMult * in.drawDist, farClip);
+	float d = std::min(kLodDistMult * in.drawDist, farClip + in.colRadius);
 	fading = kFading;
 	if (in.lodParent < 0) {
 		float f = std::min(in.drawDist, d);
