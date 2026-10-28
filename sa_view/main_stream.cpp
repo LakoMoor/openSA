@@ -822,7 +822,7 @@ void UpdateCamera() {
 		float dist = kPedFollowDist, hit = RayCastWorld(pivot, back, kPedFollowDist + 0.3f);
 		if (hit >= 0.0f) dist = std::max(0.3f, hit - 0.3f);
 		static int logged = 0;
-		if (logged++ % 120 == 0) fprintf(gLog, "follow camera: ray hit %.2f -> distance %.2f\n", hit, dist);
+		if (logged++ % 120 == 0) fprintf(gLog, "follow camera: ray hit %.2f -> distance %.2f, down %.2f, forward %.2f\n", hit, dist, RayCastWorld(pivot, {0, 0, -1}, 20.0f), RayCastWorld(pivot, dir, 20.0f));
 		f->matrix.pos = {pivot.x + back.x * dist, pivot.y + back.y * dist, pivot.z + back.z * dist};
 	}
 	f->matrix.update();
