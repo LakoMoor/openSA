@@ -364,7 +364,8 @@ int gLoadedModels = 0;
 // follows CFileLoader but uses the final multiplier (the original uses the one at load time), no occlusion/tunnel/on-screen test, no alpha fade.
 constexpr float kFading = 20.0f, kStreamMargin = 50.0f, kLowLodDistance = 150.0f, kLowLodDistScale = 1.0f;
 // CCamera::Process (0x52B730): m_fLODDistMultiplier = ms_lodDistScale (0x8CD800 = 1.2) * 70 / CDraw::ms_fFOV (0x8D5038),
-// or 1.0 while the flags at 0xB5F851/0xB5F853 select the other branch (meaning not identified; this viewer always uses the FOV branch).
+// or 1.0 during a cutscene (CCutsceneMgr::ms_running 0xB5F851 set and ms_useLodMultiplier 0xB5F853 clear; names from gta-reversed).
+// This viewer has no cutscenes, so it always takes the FOV branch.
 // ms_fFOV is set from the active camera mode every frame (gta-reversed Cam.cpp: 70 for ped/vehicle follow cams, 60/80 for some others),
 // so the multiplier tracks the FOV this viewer renders with. SA_FOV overrides the default 70.
 constexpr float kLodDistScale = 1.2f;
