@@ -44,7 +44,7 @@ cmake --build build/view --config Release --target sa_stream sa_world sa_view
 build\view\Release\sa_stream.exe "C:\Games\GTA San Andreas" 2495 -1690
 ```
 
-Controls: `G` toggles walk mode (gravity, ground collision), `W A S D` move (run; `Shift` walks, `Space` sprints, speeds from the ped.ifp root motion), `Q`/`E` down/up, `Shift` faster, left mouse drag to look, `Esc` quits.
+Controls: `G` toggles walk mode (gravity, ground collision), `W A S D` move (run; `Left Alt` walks, `Space` sprints, `Left Shift` jumps; speeds from the ped.ifp root motion, jump from CTaskSimpleJump::Launch), `Q`/`E` down/up, `Shift` faster, left mouse drag to look, `Esc` quits.
 `sa_world.exe <gamedir> [x y radius]` shows a static slice of the map, `sa_view.exe <gamedir> [model]` shows one
 model (try `infernus`, `cheetah`, `banshee`).
 

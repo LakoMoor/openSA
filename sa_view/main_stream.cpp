@@ -640,8 +640,8 @@ void CollideWalker() {
 
 // Walk mode (G): the camera is a point 1.7 m above the ground with gravity. DEVIATION: the original uses a ped with a collision
 // capsule, animations and physics; horizontal collision uses the exe's three ped spheres (CollideWalker); only the eye height is assumed.
-bool gWalk = false;
-float gVelZ = 0.0f;
+bool gWalk = false, gGrounded = true;
+float gVelZ = 0.0f, gAirVx = 0.0f, gAirVy = 0.0f;
 
 void UpdateWalk(float dt) {
 	constexpr float kOriginAboveFeet = 1.0f, kGravity = 20.0f, kStep = 1.0f, kMaxDrop = 60.0f; // 1.0 verified (ped box min z), 20 = 0.008 @0x863984
@@ -649,10 +649,11 @@ void UpdateWalk(float dt) {
 	bool ground = GroundHeight(camPos.x, camPos.y, camPos.z - kOriginAboveFeet + kStep, kMaxDrop, gz);
 	if (!ground) { gVelZ = 0.0f; return; } // no collision loaded here (yet): hold the height
 	float floorZ = gz + kOriginAboveFeet;
-	if (camPos.z > floorZ + 0.02f) {
+	gGrounded = camPos.z <= floorZ + 0.02f && gVelZ <= 0.0f;
+	if (!gGrounded) {
 		gVelZ -= kGravity * dt;
 		camPos.z += gVelZ * dt;
-		if (camPos.z < floorZ) { camPos.z = floorZ; gVelZ = 0.0f; }
+		if (camPos.z < floorZ && gVelZ < 0.0f) { camPos.z = floorZ; gVelZ = 0.0f; gGrounded = true; }
 	} else {
 		camPos.z = floorZ;
 		gVelZ = 0.0f;
@@ -705,7 +706,7 @@ void UpdateStreaming(double now) {
 			ModelState &ms = kv.second;
 			if (ms.proto && ms.users == 0) DestroyProto(kv.first, ms);
 		}
-		fprintf(gLog, "z=%.2f walk=%d ", camPos.z, (int)gWalk);
+		fprintf(gLog, "z=%.2f walk=%d grounded=%d ", camPos.z, (int)gWalk, (int)gGrounded);
 			fprintf(gLog, "clock %02d:%02d balance %.2f  ", (int)(gGameMinutes / 60), (int)gGameMinutes % 60, gDayNightBalance);
 			fprintf(gLog, "t=%.0fs cam=(%.0f,%.0f) active=%zu protos=%d pending=%zu streamer: loaded=%zu %.1f MB queued=%zu\n", now, camPos.x,
 		        camPos.y, gActive.size(), (int)std::count_if(gModels.begin(), gModels.end(), [](auto &kv) { return kv.second.proto != nil; }),
@@ -752,10 +753,10 @@ rw::Quat SampleQuat(const std::vector<sa::IfpKey> &k, float t) {
 	return q;
 }
 
-// PC controls: moving runs by default, Shift walks, Space sprints. ASSUMED: the sprint clip is sprint_civi.
+// PC controls: moving runs by default, Left Alt walks, Space sprints, Left Shift jumps. ASSUMED: the sprint clip is sprint_civi.
 const char *PedClip(bool moving) {
 	if (!moving) return "idle_stance";
-	if (sk::keys[sk::KEY_LSHIFT]) return "walk_player";
+	if (sk::keys[sk::KEY_LALT]) return "walk_player";
 	if (sk::keys[' ']) return "sprint_civi";
 	return "run_player";
 }
@@ -781,7 +782,7 @@ void SelectPedAnim(const char *name) {
 void AnimatePed(float dt) {
 	// DEVIATION: the original blends clips through the ped task system; this just switches between idle / walk / run
 	bool moving = sk::keys['W'] || sk::keys['A'] || sk::keys['S'] || sk::keys['D'];
-	SelectPedAnim(PedClip(moving));
+	SelectPedAnim(gWalk && !gGrounded ? "jump_glide" : PedClip(moving)); // DEVIATION: no launch/land clips or blending
 	if (gPedParts.empty() || !gPedAnim || gPedAnim->duration <= 0) return;
 	gAnimTime = std::fmod(gAnimTime + dt, gPedAnim->duration);
 	for (PedPart &part : gPedParts) {
@@ -1065,10 +1066,29 @@ void Idle(float dt) {
 	float speed = (gWalk ? ClipSpeed(PedClip(anyMove)) : (sk::keys[sk::KEY_LSHIFT] ? 200.0f : 40.0f)) * dt;
 	float yr = camYaw * 3.14159265f / 180.0f;
 	rw::V3d fwd = {std::sin(yr), std::cos(yr), 0.0f}, right = {std::cos(yr), -std::sin(yr), 0.0f};
-	if (sk::keys['W']) { camPos.x += fwd.x * speed; camPos.y += fwd.y * speed; }
-	if (sk::keys['S']) { camPos.x -= fwd.x * speed; camPos.y -= fwd.y * speed; }
-	if (sk::keys['D']) { camPos.x += right.x * speed; camPos.y += right.y * speed; }
-	if (sk::keys['A']) { camPos.x -= right.x * speed; camPos.y -= right.y * speed; }
+	static bool jumpDown = false;
+	static bool autoJumped = false; // test aid: SA_AUTOJUMP=1 jumps once after 12 s
+	bool autoJump = getenv("SA_AUTOJUMP") && now > 12.0 && !autoJumped;
+	if (autoJump) autoJumped = true;
+	if (gWalk && gGrounded && ((sk::keys[sk::KEY_LSHIFT] && !jumpDown) || autoJump)) {
+		// CTaskSimpleJump::Launch: force 8.5 on a 70 kg ped = 8.5/70 per tick (x50 ticks/s); horizontal 0.1 standing, 0.17 running, 0.22 sprinting.
+		// ASSUMED: those values from gta-reversed (not re-read in the exe); fat/muscle modifier 1.
+		float h = !anyMove ? 0.1f : sk::keys[sk::KEY_LALT] ? 0.1f : sk::keys[' '] ? 0.22f : 0.17f;
+		gVelZ = 8.5f / 70.0f * 50.0f;
+		gAirVx = fwd.x * h * 50.0f;
+		gAirVy = fwd.y * h * 50.0f;
+		gGrounded = false;
+	}
+	jumpDown = sk::keys[sk::KEY_LSHIFT];
+	if (gWalk && !gGrounded) {
+		camPos.x += gAirVx * dt;
+		camPos.y += gAirVy * dt;
+	} else {
+		if (sk::keys['W']) { camPos.x += fwd.x * speed; camPos.y += fwd.y * speed; }
+		if (sk::keys['S']) { camPos.x -= fwd.x * speed; camPos.y -= fwd.y * speed; }
+		if (sk::keys['D']) { camPos.x += right.x * speed; camPos.y += right.y * speed; }
+		if (sk::keys['A']) { camPos.x -= right.x * speed; camPos.y -= right.y * speed; }
+	}
 	static bool gDown = false;
 	if (sk::keys['G'] && !gDown) { gWalk = !gWalk; gVelZ = 0.0f; }
 	gDown = sk::keys['G'];
