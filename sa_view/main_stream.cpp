@@ -714,10 +714,11 @@ void UpdateStreaming(double now) {
 	}
 }
 
-// Visible ped (walk mode). DEVIATIONS: the model is the generic male01 ped (CJ needs the clothes builder: player.dff + player.img parts);
+// Visible ped (walk mode). DEVIATIONS: CJ is assembled from the base player.img parts without clothes (see LoadCj);
 // the follow camera uses an assumed distance/height instead of CCam::Process_FollowPed_SA, with a simple ray test against COL geometry.
-rw::Clump *gPed = nil;
-rw::HAnimHierarchy *gPedHier = nil;
+// The ped is one or more skinned clumps that share the same animation (CJ: one per body part, each with its own copy of the skeleton).
+struct PedPart { rw::Clump *clump = nil; rw::HAnimHierarchy *hier = nil; };
+std::vector<PedPart> gPedParts;
 constexpr float kPedFollowDist = 4.0f, kPedFollowUp = 0.8f;
 
 // ped.ifp animation on the ped's hierarchy. Rotation keys replace the bone's local rotation, translation keys (root only) its position.
@@ -781,70 +782,124 @@ void AnimatePed(float dt) {
 	// DEVIATION: the original blends clips through the ped task system; this just switches between idle / walk / run
 	bool moving = sk::keys['W'] || sk::keys['A'] || sk::keys['S'] || sk::keys['D'];
 	SelectPedAnim(PedClip(moving));
-	if (!gPed || !gPedHier || !gPedAnim || gPedAnim->duration <= 0) return;
+	if (gPedParts.empty() || !gPedAnim || gPedAnim->duration <= 0) return;
 	gAnimTime = std::fmod(gAnimTime + dt, gPedAnim->duration);
-	for (const sa::IfpSeq &sq : gPedAnim->seqs) {
-		int ni = gPedHier->getIndex(sq.boneTag);
-		if (ni < 0 || sq.keys.empty()) continue;
-		rw::Frame *fr = gPedHier->nodeInfo[ni].frame;
-		if (!fr) continue;
-		rw::Quat q = SampleQuat(sq.keys, gAnimTime);
-		rw::Matrix m;
-		rw::Matrix::makeRotation(&m, q);
-		fr->matrix.right = m.right; fr->matrix.up = m.up; fr->matrix.at = m.at;
-		if (sq.hasTrans) {
-			const sa::IfpKey &k = sq.keys[0];
-			fr->matrix.pos = {k.t[0], k.t[1], k.t[2]};
+	for (PedPart &part : gPedParts) {
+		if (!part.hier) continue;
+		for (const sa::IfpSeq &sq : gPedAnim->seqs) {
+			int ni = part.hier->getIndex(sq.boneTag);
+			if (ni < 0 || sq.keys.empty()) continue;
+			rw::Frame *fr = part.hier->nodeInfo[ni].frame;
+			if (!fr) continue;
+			rw::Quat q = SampleQuat(sq.keys, gAnimTime);
+			rw::Matrix m;
+			rw::Matrix::makeRotation(&m, q);
+			fr->matrix.right = m.right; fr->matrix.up = m.up; fr->matrix.at = m.at;
+			if (sq.hasTrans) {
+				const sa::IfpKey &k = sq.keys[0];
+				fr->matrix.pos = {k.t[0], k.t[1], k.t[2]};
+			}
+			fr->matrix.update();
 		}
-		fr->matrix.update();
+		part.clump->getFrame()->updateObjects();
+		// the hierarchy has no interpolator (updateMatrices would crash), so take the bone matrices straight from the frames' LTMs
+		for (int i = 0; i < part.hier->numNodes; i++)
+			if (part.hier->nodeInfo[i].frame) part.hier->matrices[i] = *part.hier->nodeInfo[i].frame->getLTM();
 	}
-	gPed->getFrame()->updateObjects();
-	// the hierarchy has no interpolator (updateMatrices would crash), so take the bone matrices straight from the frames' LTMs
-	for (int i = 0; i < gPedHier->numNodes; i++)
-		if (gPedHier->nodeInfo[i].frame) gPedHier->matrices[i] = *gPedHier->nodeInfo[i].frame->getLTM();
+}
+
+// Streams one clump (dff bytes) with textures taken from the given dictionaries; adds it to the world and binds its skeleton.
+bool AddPedPart(const std::vector<uint8_t> &dff, const std::vector<rw::TexDictionary *> &txds, const char *what, const char *skinTexture = nullptr) {
+	gChain = txds;
+	rw::TexDictionary::setCurrent(nil);
+	rw::Texture::findCB = FindInChain;
+	rw::StreamMemory sm;
+	sm.open(const_cast<uint8_t *>(dff.data()), (rw::uint32)dff.size());
+	rw::Clump *c = rw::findChunk(&sm, rw::ID_CLUMP, nil, nil) ? rw::Clump::streamRead(&sm) : nil;
+	sm.close();
+	if (!c) { fprintf(gLog, "ped: %s failed to load\n", what); return false; }
+	if (skinTexture) { // CJ's body parts carry no textures; the clothes builder assigns them
+		rw::Texture *tex = FindInChain(skinTexture);
+		FORLIST(lnk, c->atomics) {
+			rw::Geometry *g = rw::Atomic::fromClump(lnk)->geometry;
+			for (int i = 0; i < g->matList.numMaterials; i++) g->matList.materials[i]->setTexture(tex);
+		}
+		if (!tex) fprintf(gLog, "ped: texture %s not found\n", skinTexture);
+	}
+	gWorld->addClump(c);
+	PedPart part;
+	part.clump = c;
+	part.hier = rw::HAnimHierarchy::find(c->getFrame());
+	if (part.hier) part.hier->attach(); // binds each node to the frame with the same hanim id
+	FORLIST(lnk, c->atomics) {
+		rw::Atomic *at = rw::Atomic::fromClump(lnk);
+		if (part.hier && rw::Skin::get(at->geometry)) rw::Skin::setHierarchy(at, part.hier);
+	}
+	fprintf(gLog, "ped: %s loaded (hierarchy %s, %d nodes)\n", what, part.hier ? "found" : "missing", part.hier ? part.hier->numNodes : 0);
+	gPedParts.push_back(part);
+	return true;
+}
+
+// CJ without clothes: the base body parts of player.img (an all-zero CPedClothesDesc selects model key 0 / texture key 0) with the
+// plain player_face / player_torso / player_legs / player_feet textures. DEVIATION: the outfit the original game starts with comes from
+// the script/save (GIVE_PLAYER_CLOTHES) and is merged into one geometry by CClothesBuilder; here every part is its own skinned clump.
+bool LoadCj() {
+	sa::ImgV2 img;
+	if (!img.Open(gameDir + "/models/player.img")) return false;
+	auto read = [&](const char *name, std::vector<uint8_t> &out) {
+		const sa::ImgEntry *e = img.Find(name);
+		return e && img.Read(*e, out);
+	};
+	std::vector<rw::TexDictionary *> txds;
+	for (const char *t : {"player_torso.txd", "player_face.txd", "player_legs.txd", "player_feet.txd"}) {
+		std::vector<uint8_t> b;
+		if (!read(t, b)) return false;
+		if (rw::TexDictionary *d = ReadTxd(b)) {
+			FORLIST(lnk, d->textures) rw::Texture::fromDict(lnk)->setFilter(rw::Texture::LINEARMIPLINEAR);
+			txds.push_back(d);
+		}
+	}
+	bool ok = true;
+	// ASSUMED part -> texture mapping (head: face, hands share the torso skin texture)
+	struct { const char *dff, *tex; } parts[] = {{"head.dff", "face"}, {"hands.dff", "torso"}, {"torso.dff", "torso"}, {"legs.dff", "legs"}, {"feet.dff", "foot"}};
+	for (auto &pt : parts) {
+		std::vector<uint8_t> b;
+		if (!read(pt.dff, b) || !AddPedPart(b, txds, pt.dff, pt.tex)) ok = false;
+	}
+	return ok;
+}
+
+void DestroyPed() {
+	for (PedPart &p : gPedParts) { gWorld->removeClump(p.clump); p.clump->destroy(); }
+	gPedParts.clear();
 }
 
 void EnsurePed() {
-	if (gPed) return;
+	if (!gPedParts.empty()) return;
+	if (gAnims.empty()) LoadPedAnims();
+	if (!getenv("SA_MALE01") && LoadCj()) return;
+	DestroyPed();
 	const sa::ImgV2 &gta3 = gW.archives[0];
 	const sa::ImgEntry *ed = gta3.Find("male01.dff"), *et = gta3.Find("male01.txd");
 	std::vector<uint8_t> dff, txd;
 	if (!ed || !et || !gta3.Read(*ed, dff) || !gta3.Read(*et, txd)) { fprintf(gLog, "ped: male01 not found\n"); return; }
-	rw::TexDictionary *d = ReadTxd(txd);
-	gChain.clear();
-	if (d) gChain.push_back(d);
-	rw::TexDictionary::setCurrent(nil);
-	rw::Texture::findCB = FindInChain;
-	rw::StreamMemory sm;
-	sm.open(dff.data(), (rw::uint32)dff.size());
-	if (rw::findChunk(&sm, rw::ID_CLUMP, nil, nil)) gPed = rw::Clump::streamRead(&sm);
-	sm.close();
-	fprintf(gLog, "ped: male01 %s\n", gPed ? "loaded" : "failed");
-	if (gPed) {
-		gWorld->addClump(gPed);
-		gPedHier = rw::HAnimHierarchy::find(gPed->getFrame());
-		fprintf(gLog, "ped: hierarchy %s (%d nodes, flags %x, matrices %p, interp %p)\n", gPedHier ? "found" : "missing", gPedHier ? gPedHier->numNodes : 0,
-		        gPedHier ? gPedHier->flags : 0, gPedHier ? (void *)gPedHier->matrices : nullptr, gPedHier ? (void *)gPedHier->interpolator : nullptr);
-		if (gPedHier) gPedHier->attach(); // binds each node to the frame with the same hanim id
-		if (gPedHier) FORLIST(lnk, gPed->atomics) {
-			rw::Atomic *at = rw::Atomic::fromClump(lnk);
-			if (rw::Skin::get(at->geometry)) rw::Skin::setHierarchy(at, gPedHier);
-		}
-		if (gAnims.empty()) LoadPedAnims();
-	}
+	std::vector<rw::TexDictionary *> t;
+	if (rw::TexDictionary *d = ReadTxd(txd)) t.push_back(d);
+	AddPedPart(dff, t, "male01");
 }
 
 void UpdatePed() {
 	const bool show = getenv("SA_PEDSHOW") != nullptr; // test aid: draw the ped 6 m ahead of the free camera
-	if (!gWalk && !show) { if (gPed) { gWorld->removeClump(gPed); gPed->destroy(); gPed = nil; gPedHier = nil; } return; }
+	if (!gWalk && !show) { DestroyPed(); return; }
 	EnsurePed();
-	if (!gPed) return;
 	rw::V3d zaxis = {0, 0, 1};
-	rw::Frame *f = gPed->getFrame();
-	f->rotate(&zaxis, -camYaw, rw::COMBINEREPLACE);
-	rw::V3d feet = {camPos.x, camPos.y, camPos.z - 1.7f + 1.0f};
-	if (show && !gWalk) feet = {camPos.x + std::sin(camYaw * 0.0174533f) * 6.0f, camPos.y + std::cos(camYaw * 0.0174533f) * 6.0f, camPos.z - 2.0f}; // ped origin is 1.0 above the feet (verified); 1.7 = assumed eye height
-	f->translate(&feet, rw::COMBINEPOSTCONCAT);
+	rw::V3d feet = {camPos.x, camPos.y, camPos.z - 1.7f + 1.0f}; // ped origin is 1.0 above the feet (verified); 1.7 = assumed eye height
+	if (show && !gWalk) feet = {camPos.x + std::sin(camYaw * 0.0174533f) * 6.0f, camPos.y + std::cos(camYaw * 0.0174533f) * 6.0f, camPos.z - 2.0f};
+	for (PedPart &p : gPedParts) {
+		rw::Frame *f = p.clump->getFrame();
+		f->rotate(&zaxis, -camYaw, rw::COMBINEREPLACE);
+		f->translate(&feet, rw::COMBINEPOSTCONCAT);
+	}
 }
 
 void UpdateCamera() {
@@ -854,7 +909,7 @@ void UpdateCamera() {
 	rw::Frame *f = gCamera->getFrame();
 	f->matrix.lookAt(dir, up);
 	f->matrix.pos = camPos;
-	if (gWalk && gPed) { // third-person: back off along the view direction, stopping short of geometry in between
+	if (gWalk && !gPedParts.empty()) { // third-person: back off along the view direction, stopping short of geometry in between
 		rw::V3d back = {-dir.x, -dir.y, -dir.z};
 		rw::V3d pivot = {camPos.x, camPos.y, camPos.z + kPedFollowUp};
 		float dist = kPedFollowDist, hit = RayCastWorld(pivot, back, kPedFollowDist + 0.3f);
