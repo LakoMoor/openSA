@@ -734,6 +734,27 @@ rw::Quat SampleQuat(const std::vector<sa::IfpKey> &k, float t) {
 	return q;
 }
 
+// PC controls: moving runs by default, Shift walks, Space sprints. ASSUMED: the sprint clip is sprint_civi.
+const char *PedClip(bool moving) {
+	if (!moving) return "idle_stance";
+	if (sk::keys[sk::KEY_LSHIFT]) return "walk_player";
+	if (sk::keys[' ']) return "sprint_civi";
+	return "run_player";
+}
+
+// Forward speed of a clip from its root translation over one loop (VERIFIED from ped.ifp: walk_player 1.56, run_player 5.71, sprint_civi 9.56 m/s).
+// DEVIATION: the original moves the ped by the clip's root motion every frame; this just applies the average speed.
+float ClipSpeed(const char *name) {
+	auto it = gAnims.find(name);
+	if (it == gAnims.end()) return 0.0f;
+	for (const sa::IfpSeq &sq : it->second.seqs)
+		if (sq.boneTag == 0 && sq.hasTrans && sq.keys.size() > 1) {
+			const sa::IfpKey &a = sq.keys.front(), &b = sq.keys.back();
+			return b.time > a.time ? (b.t[1] - a.t[1]) / (b.time - a.time) : 0.0f;
+		}
+	return 0.0f;
+}
+
 void SelectPedAnim(const char *name) {
 	auto it = gAnims.find(name);
 	if (it != gAnims.end() && gPedAnim != &it->second) { gPedAnim = &it->second; gAnimTime = 0.0f; }
@@ -742,7 +763,7 @@ void SelectPedAnim(const char *name) {
 void AnimatePed(float dt) {
 	// DEVIATION: the original blends clips through the ped task system; this just switches between idle / walk / run
 	bool moving = sk::keys['W'] || sk::keys['A'] || sk::keys['S'] || sk::keys['D'];
-	SelectPedAnim(!moving ? "idle_stance" : sk::keys[sk::KEY_LSHIFT] ? "run_player" : "walk_player");
+	SelectPedAnim(PedClip(moving));
 	if (!gPed || !gPedHier || !gPedAnim || gPedAnim->duration <= 0) return;
 	gAnimTime = std::fmod(gAnimTime + dt, gPedAnim->duration);
 	for (const sa::IfpSeq &sq : gPedAnim->seqs) {
@@ -901,7 +922,8 @@ bool AttachPlugins() {
 void Idle(float dt) {
 	static auto start = std::chrono::steady_clock::now();
 	double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-	float speed = (gWalk ? (sk::keys[sk::KEY_LSHIFT] ? 9.0f : 5.0f) : (sk::keys[sk::KEY_LSHIFT] ? 200.0f : 40.0f)) * dt;
+	bool anyMove = sk::keys['W'] || sk::keys['A'] || sk::keys['S'] || sk::keys['D'];
+	float speed = (gWalk ? ClipSpeed(PedClip(anyMove)) : (sk::keys[sk::KEY_LSHIFT] ? 200.0f : 40.0f)) * dt;
 	float yr = camYaw * 3.14159265f / 180.0f;
 	rw::V3d fwd = {std::sin(yr), std::cos(yr), 0.0f}, right = {std::cos(yr), -std::sin(yr), 0.0f};
 	if (sk::keys['W']) { camPos.x += fwd.x * speed; camPos.y += fwd.y * speed; }
