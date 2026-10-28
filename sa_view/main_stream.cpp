@@ -673,9 +673,10 @@ void UpdateWalk(float dt) {
 	constexpr float kOriginAboveFeet = 1.0f, kGravity = 20.0f, kStep = 1.0f, kMaxDrop = 60.0f; // 1.0 verified (ped box min z), 20 = 0.008 @0x863984
 	float gz;
 	bool ground = GroundHeight(camPos.x, camPos.y, camPos.z - kOriginAboveFeet + kStep, kMaxDrop, gz);
-	// Swimming. DEVIATION: the entry rule is a guess (water deeper than 1.3 m over the ground); the original starts CTaskSimpleSwim from the
-	// ped's water contact. Height follows CTaskSimpleSwim::ProcessSwimmingResistance: equilibrium origin = waterLevel - 0.55 when treading,
-	// vertical speed clamped to 0.1 per tick (5 m/s).
+	// Swimming. DEVIATION: the entry rule is a guess (water deeper than 1.3 m over the ground); the original creates CTaskSimpleSwim from
+	// 0x68B050 (not reversed here). Height follows CTaskSimpleSwim::ProcessSwimmingResistance (0x68A1D0, constants read in the exe: 0.55 tread,
+	// 0.4 breast, 0.2 crawl, 0.65 surface test, 0.1 per tick clamp): equilibrium origin = waterLevel - 0.55 when treading. The 0.4/0.2 blends and
+	// the smoothing are not implemented (no clip blending), so moving also sits at the tread height.
 	float wl;
 	// without loaded ground below, only an already-near-the-surface ped counts as swimming (water polygons also cover coastal land)
 	gSwimming = WaterLevelAt(camPos.x, camPos.y, wl) && (ground ? wl - gz > 1.3f : camPos.z <= wl + 2.0f);
