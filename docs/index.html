@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>openSA</title>
+<meta name="description" content="An open-source reimplementation of the GTA San Andreas runtime, built from reverse engineering of your own copy of the game.">
+<link rel="icon" href="assets/favicon.png">
+<style>
+  :root {
+    --night: #120a1f;
+    --night2: #1c1030;
+    --orange: #f4a21e;
+    --hot: #e8503a;
+    --green: #3fa34d;
+    --lime: #b9e36a;
+    --paper: #f3e9d2;
+    --muted: #a99bc0;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--night);
+    color: var(--paper);
+    font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.55;
+  }
+  /* film-grain over everything, like the loading screens */
+  body::before {
+    content: "";
+    position: fixed; inset: 0; pointer-events: none; z-index: 50; opacity: .07;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/></filter><rect width='160' height='160' filter='url(%23n)'/></svg>");
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+  h1, h2, h3, .btn, .tag, nav a {
+    font-family: Impact, Haettenschweiler, "Arial Narrow Bold", "Franklin Gothic Heavy", sans-serif;
+    font-weight: 400; letter-spacing: .02em; text-transform: uppercase;
+  }
+  /* top bar */
+  nav { position: sticky; top: 0; z-index: 20; background: rgba(18,10,31,.92); backdrop-filter: blur(6px); border-bottom: 3px solid var(--orange); }
+  nav .wrap { display: flex; align-items: center; gap: 22px; height: 56px; }
+  nav img { height: 36px; width: 36px; border-radius: 8px; }
+  nav .brand { font-family: Impact, Haettenschweiler, sans-serif; font-size: 24px; color: var(--orange); text-decoration: none; letter-spacing: .04em; }
+  nav a.l { color: var(--paper); text-decoration: none; font-size: 16px; opacity: .85; }
+  nav a.l:hover { color: var(--orange); opacity: 1; }
+  nav .sp { flex: 1; }
+  /* hero */
+  .hero {
+    position: relative; overflow: hidden; padding: 84px 0 96px;
+    background:
+      radial-gradient(ellipse 60% 55% at 72% 78%, rgba(255,214,96,.55), transparent 70%),
+      linear-gradient(180deg, #2e1054 0%, #96246e 40%, #f46236 72%, #ffb234 100%);
+  }
+  .hero::after { /* skyline */
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 90px; background: var(--night);
+    clip-path: polygon(0 100%,0 55%,6% 55%,6% 30%,12% 30%,12% 62%,18% 62%,18% 20%,25% 20%,25% 48%,31% 48%,31% 70%,38% 70%,38% 35%,45% 35%,45% 58%,52% 58%,52% 15%,58% 15%,58% 50%,65% 50%,65% 28%,72% 28%,72% 66%,79% 66%,79% 40%,86% 40%,86% 22%,93% 22%,93% 56%,100% 56%,100% 100%);
+  }
+  .hero .wrap { display: grid; grid-template-columns: 1.3fr .7fr; gap: 36px; align-items: center; position: relative; z-index: 2; }
+  .hero h1 {
+    font-size: clamp(64px, 11vw, 132px); line-height: .9; margin: 0 0 12px; font-style: italic;
+    color: var(--lime);
+    text-shadow: 4px 4px 0 #0d2a12, -2px -2px 0 #0d2a12, 2px -2px 0 #0d2a12, -2px 2px 0 #0d2a12, 0 0 28px rgba(0,0,0,.35);
+  }
+  .hero h1 span { color: var(--orange); }
+  .hero p.lead { font-size: 20px; max-width: 34em; margin: 0 0 26px; text-shadow: 0 2px 8px rgba(0,0,0,.55); }
+  .hero img.logo { width: 100%; max-width: 330px; justify-self: center; filter: drop-shadow(0 14px 30px rgba(0,0,0,.5)); transform: rotate(3deg); }
+  .btn {
+    display: inline-block; padding: 12px 26px; margin: 0 10px 10px 0; font-size: 20px; text-decoration: none;
+    color: #1a0d00; background: var(--orange); border: 3px solid #1a0d00; box-shadow: 5px 5px 0 #1a0d00;
+    transform: skew(-6deg); transition: transform .1s, box-shadow .1s;
+  }
+  .btn:hover { transform: skew(-6deg) translate(2px,2px); box-shadow: 3px 3px 0 #1a0d00; }
+  .btn.alt { background: var(--paper); }
+  /* sections */
+  section { padding: 64px 0 8px; }
+  h2 { font-size: 42px; margin: 0 0 8px; color: var(--orange); font-style: italic; text-shadow: 3px 3px 0 #000; }
+  h2::after { content: ""; display: block; width: 90px; height: 6px; background: var(--hot); margin-top: 6px; transform: skew(-20deg); }
+  .sub { color: var(--muted); margin: 0 0 26px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 18px; }
+  .card { background: linear-gradient(160deg, var(--night2), #150b25); border: 2px solid #3a2858; border-left: 6px solid var(--green); padding: 18px 20px; }
+  .card h3 { margin: 0 0 8px; font-size: 22px; color: var(--paper); }
+  .card p { margin: 0; color: #d9cfe8; font-size: 15px; }
+  .tag { display: inline-block; font-size: 13px; padding: 2px 8px; margin-right: 6px; background: var(--green); color: #07230c; }
+  .tag.wip { background: var(--orange); color: #2b1600; }
+  .tag.todo { background: var(--hot); color: #2d0903; }
+  .shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  figure { margin: 0; border: 3px solid var(--paper); box-shadow: 6px 6px 0 #000; background: #000; }
+  figure img { display: block; width: 100%; height: auto; }
+  figcaption { padding: 8px 12px; font-size: 14px; background: var(--night2); color: var(--muted); }
+  code, pre { font-family: Consolas, "Cascadia Mono", monospace; }
+  pre { background: #0b0614; border: 2px solid #3a2858; padding: 16px; overflow: auto; font-size: 14px; color: #cfe6c0; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #3a2858; vertical-align: top; }
+  th { color: var(--orange); font-family: Impact, sans-serif; font-weight: 400; letter-spacing: .03em; text-transform: uppercase; }
+  .legal { margin-top: 56px; padding: 24px 0 40px; border-top: 3px solid var(--hot); color: var(--muted); font-size: 14px; }
+  .legal strong { color: var(--paper); }
+  a { color: var(--lime); }
+  footer { background: #0b0614; padding: 26px 0; text-align: center; color: var(--muted); font-size: 14px; }
+  @media (max-width: 760px) {
+    .hero .wrap { grid-template-columns: 1fr; }
+    .hero img.logo { max-width: 220px; order: -1; }
+    nav a.l { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <img src="assets/logo.png" alt="">
+    <a class="brand" href="#top">openSA</a>
+    <span class="sp"></span>
+    <a class="l" href="#status">Status</a>
+    <a class="l" href="#shots">Screens</a>
+    <a class="l" href="#how">How it works</a>
+    <a class="l" href="#build">Build</a>
+    <a class="l" href="https://github.com/LakoMoor/openSA">GitHub</a>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <div>
+      <h1>open<span>SA</span></h1>
+      <p class="lead">An open-source reimplementation of the GTA&nbsp;San&nbsp;Andreas runtime. Written in C++ on top of librw, checked against the 1.0&nbsp;US executable you already own. No game files included &mdash; bring your own copy.</p>
+      <a class="btn" href="https://github.com/LakoMoor/openSA">Get the code</a>
+      <a class="btn alt" href="#status">Project status</a>
+    </div>
+    <img class="logo" src="assets/logo.png" alt="openSA logo: a palm tree in front of a setting sun">
+  </div>
+</header>
+
+<main class="wrap">
+
+<section id="status">
+  <h2>Mission log</h2>
+  <p class="sub">What runs today, and what is still ahead. Early-stage: this is a data and streaming layer with viewers, not a playable game.</p>
+  <div class="grid">
+    <div class="card"><h3><span class="tag">Done</span>Data loading</h3><p>IMG v2 archives, <code>gta.dat</code>/<code>default.dat</code>, every IDE section (objects, vehicles, peds, weapons, animated objects, TXD parents), text and binary IPL, RenderWare 3.6 DFF/TXD. All 14&nbsp;800 models and 3&nbsp;000 texture dictionaries of the stock game parse without errors.</p></div>
+    <div class="card"><h3><span class="tag">Done</span>Streaming slots</h3><p>The slot layout follows <code>CStreaming::LoadCdDirectory</code> as decompiled from the executable: TXD, COL, IPL, DAT, IFP, RRR and SCM id ranges, a 5000-slot TXD pool, and the model pool sizes from <code>CPools::Initialise</code>.</p></div>
+    <div class="card"><h3><span class="tag">Done</span>Request / load / remove</h3><p>A synchronous streamer: requesting a model also requests its TXD and parents, resources are read from the archives and released again when the last instance goes away.</p></div>
+    <div class="card"><h3><span class="tag">Done</span>Streamed world viewer</h3><p><code>sa_stream</code> flies a free camera over the whole map. Models and textures are pulled in around the camera, LOD stand-ins appear at a distance, and everything is dropped again behind you.</p></div>
+    <div class="card"><h3><span class="tag wip">Partial</span>Vehicles</h3><p>Body paint from <code>carcols.dat</code>, wheels attached to the wheel dummies, damage parts hidden. The stock wheel for each car and the right-hand wheel orientation are not yet checked against the executable.</p></div>
+    <div class="card"><h3><span class="tag wip">Partial</span>Visibility rules</h3><p>Draw distance and LOD switching use a heuristic. Replacing it with the real <code>CRenderer</code> logic is the current work item.</p></div>
+    <div class="card"><h3><span class="tag todo">Todo</span>Time of day &amp; weather</h3><p>Fixed noon, no <code>timecyc</code>, no fog, no vehicle reflections yet.</p></div>
+    <div class="card"><h3><span class="tag todo">Todo</span>Gameplay</h3><p>Collision, peds, traffic, scripts, audio. The roadmap is long; the goal is behaviour identical to the original.</p></div>
+  </div>
+</section>
+
+<section id="shots">
+  <h2>On screen</h2>
+  <p class="sub">Captured from the project's own viewers, rendering data from the author's legitimately owned copy of the game.</p>
+  <div class="shots">
+    <figure><img src="assets/shot-streaming-ls.jpg" alt="Los Santos streets with distant buildings" loading="lazy"><figcaption>Los Santos near Grove Street, streamed around the camera with LOD buildings in the distance.</figcaption></figure>
+    <figure><img src="assets/shot-downtown.jpg" alt="Downtown Los Santos from a freeway" loading="lazy"><figcaption>Downtown, reached by flying across the map &mdash; everything loaded on the way.</figcaption></figure>
+    <figure><img src="assets/shot-infernus.jpg" alt="Infernus with wheels" loading="lazy"><figcaption>Vehicle viewer: Infernus with palette paint and wheels.</figcaption></figure>
+    <figure><img src="assets/shot-cheetah.jpg" alt="Cheetah in dark blue" loading="lazy"><figcaption>Cheetah painted from <code>carcols.dat</code> (palette entry 20).</figcaption></figure>
+  </div>
+</section>
+
+<section id="how">
+  <h2>How it is built</h2>
+  <p class="sub">Every constant that can be read from the game is read from the game. Where it cannot be confirmed yet, the code and notes say so.</p>
+  <table>
+    <tr><th>Piece</th><th>Source of truth</th></tr>
+    <tr><td>Streaming id ranges, IMG directory handling</td><td>Decompiled <code>CStreaming::LoadCdDirectory</code> (0x5B6170) in the 1.0 US executable</td></tr>
+    <tr><td>Pool capacities</td><td><code>CPools::Initialise</code> (0x550F10): 140 peds, 110 vehicles, 13&nbsp;000 buildings, 350 objects, 10&nbsp;150 collision models, &hellip;</td></tr>
+    <tr><td>TXD slot assignment</td><td><code>CFileLoader::LoadObject</code> and <code>CTxdStore::AddTxdSlot</code>; four reserved slots, ids start at 20000</td></tr>
+    <tr><td>IDE line formats</td><td><code>LoadVehicleObject</code>, <code>LoadPedObject</code>, <code>LoadWeaponObject</code> and friends</td></tr>
+    <tr><td>Binary IPL</td><td>Header, 40-byte instances, LOD indices into the parent text IPL, conjugated quaternions &mdash; checked on all 190 streaming IPLs</td></tr>
+    <tr><td>Rendering</td><td><a href="https://github.com/aap/librw">librw</a> (D3D9 backend)</td></tr>
+  </table>
+</section>
+
+<section id="build">
+  <h2>Build it</h2>
+  <p class="sub">Windows, Visual Studio 2022, CMake 3.15+. You need a copy of GTA San Andreas (Steam works) &mdash; the viewers only read its <code>data</code> and <code>models</code> folders.</p>
+<pre>git clone https://github.com/LakoMoor/openSA
+cd openSA
+git clone https://github.com/aap/librw third_party/librw
+
+cmake -S sa_view -B build/view
+cmake --build build/view --config Release --target sa_stream
+
+build\view\Release\sa_stream.exe "C:\Games\GTA San Andreas" 2495 -1690</pre>
+  <p>WASD to move, Q/E for height, Shift to go faster, drag with the left mouse button to look around.</p>
+</section>
+
+<div class="legal">
+  <p><strong>Not affiliated with Rockstar Games or Take-Two Interactive.</strong> openSA contains no game code, art, audio or data, and cannot run without a copy of the original game. &ldquo;Grand Theft Auto&rdquo; and &ldquo;San Andreas&rdquo; are trademarks of their respective owners. The logo is original artwork. Screenshots show the viewers rendering data from a legally owned copy of the game.</p>
+</div>
+
+</main>
+
+<footer>openSA &middot; made by LakoMoor &middot; <a href="https://github.com/LakoMoor/openSA">source on GitHub</a></footer>
+
+</body>
+</html>

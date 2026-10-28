@@ -1,0 +1,12 @@
+build/
+third_party/
+*.log
+*.exe
+*.obj
+*.pdb
+*.img
+*.dff
+*.txd
+*.ipl
+*.ide
+.vs/
