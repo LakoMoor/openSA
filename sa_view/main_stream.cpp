@@ -26,6 +26,7 @@ rw::EngineOpenParams engineOpenParams;
 namespace {
 
 struct Inst {
+	const sa::ColModel *col = nil; // collision geometry (COL), nil when the model has none
 	int id;
 	rw::V3d pos;
 	rw::Quat rot;
@@ -251,7 +252,7 @@ const float kMaxRange = 1000.0f;
 
 // Text IPLs come first in a "name -> local index -> global index" table because the binary streaming IPLs
 // (X_streamN) reference their LOD parent by index into the text IPL X (CIplStore::LoadIpl, see BinaryIpl.h).
-std::unordered_map<std::string, sa::ColBound> gColBounds; // lower-case model name -> COL bound
+std::unordered_map<std::string, sa::ColModel> gColBounds; // lower-case model name -> COL record (bounds and geometry)
 
 void LoadColBounds() {
 	const sa::ImgV2 &gta3 = gW.archives[0];
@@ -260,7 +261,7 @@ void LoadColBounds() {
 		auto dot = e.name.rfind('.');
 		if (dot == std::string::npos || Lower(e.name.substr(dot)) != ".col") continue;
 		std::vector<uint8_t> buf;
-		if (gta3.Read(e, buf)) { sa::ParseColBounds(buf.data(), buf.size(), gColBounds); files++; }
+		if (gta3.Read(e, buf)) { sa::ParseColModels(buf.data(), buf.size(), gColBounds); files++; }
 	}
 	fprintf(gLog, "COL bounds: %zu models from %zu files\n", gColBounds.size(), files);
 }
@@ -279,7 +280,7 @@ void CollectPlacements() {
 		i.rot = {-q[0], -q[1], -q[2], q[3]}; // IPL quaternions are stored conjugated
 		i.drawDist = d->drawDist[0];
 		auto cb = gColBounds.find(Lower(d->model));
-		if (cb != gColBounds.end()) i.colRadius = cb->second.radius;
+		if (cb != gColBounds.end()) { i.colRadius = cb->second.bound.radius; i.col = &cb->second; }
 		int idx = (int)gInsts.size();
 		gGrid[CellKey(CellOf(x), CellOf(y))].push_back(idx);
 		gInsts.push_back(i);
@@ -395,6 +396,97 @@ float Dist3(const Inst &in) {
 // a LOD parent with several children is replaced by them once all of them are rendered (CRenderer::ProcessLodRenderLists)
 bool CoveredByChildren(const Inst &in) { return in.numLodChildren > 1 && in.activeChildren >= in.numLodChildren; }
 
+// ---- collision: ground height under a point (vertical ray against COL triangles and boxes of nearby instances) ----
+rw::V3d QuatRotate(const rw::Quat &q, const rw::V3d &v, bool inverse) {
+	float ux = inverse ? -q.x : q.x, uy = inverse ? -q.y : q.y, uz = inverse ? -q.z : q.z, w = q.w;
+	rw::V3d c1 = {uy * v.z - uz * v.y, uz * v.x - ux * v.z, ux * v.y - uy * v.x}; // u x v
+	rw::V3d c2 = {uy * c1.z - uz * c1.y, uz * c1.x - ux * c1.z, ux * c1.y - uy * c1.x}; // u x (u x v)
+	return {v.x + 2.0f * (w * c1.x + c2.x), v.y + 2.0f * (w * c1.y + c2.y), v.z + 2.0f * (w * c1.z + c2.z)};
+}
+
+// distance along a ray to a triangle (Moller-Trumbore), -1 on miss
+float RayTri(const rw::V3d &o, const rw::V3d &d, const float *a, const float *b, const float *c) {
+	float e1[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]}, e2[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+	float p[3] = {d.y * e2[2] - d.z * e2[1], d.z * e2[0] - d.x * e2[2], d.x * e2[1] - d.y * e2[0]};
+	float det = e1[0] * p[0] + e1[1] * p[1] + e1[2] * p[2];
+	if (std::fabs(det) < 1e-9f) return -1;
+	float inv = 1.0f / det, t[3] = {o.x - a[0], o.y - a[1], o.z - a[2]};
+	float u = (t[0] * p[0] + t[1] * p[1] + t[2] * p[2]) * inv;
+	if (u < 0 || u > 1) return -1;
+	float q[3] = {t[1] * e1[2] - t[2] * e1[1], t[2] * e1[0] - t[0] * e1[2], t[0] * e1[1] - t[1] * e1[0]};
+	float v = (d.x * q[0] + d.y * q[1] + d.z * q[2]) * inv;
+	if (v < 0 || u + v > 1) return -1;
+	return (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]) * inv;
+}
+
+float RayBox(const rw::V3d &o, const rw::V3d &d, const sa::ColBox &b) {
+	float tmin = 0, tmax = 1e9f;
+	const float oo[3] = {o.x, o.y, o.z}, dd[3] = {d.x, d.y, d.z};
+	for (int k = 0; k < 3; k++) {
+		if (std::fabs(dd[k]) < 1e-9f) { if (oo[k] < b.min[k] || oo[k] > b.max[k]) return -1; continue; }
+		float t1 = (b.min[k] - oo[k]) / dd[k], t2 = (b.max[k] - oo[k]) / dd[k];
+		if (t1 > t2) std::swap(t1, t2);
+		tmin = std::max(tmin, t1); tmax = std::min(tmax, t2);
+		if (tmin > tmax) return -1;
+	}
+	return tmin;
+}
+
+// Highest collision surface at or below zFrom (searching down to zFrom - maxDrop); returns false when there is none.
+// Big buildings (LOD models) have collision disabled in the original (CEntity::SetupBigBuilding), so they are skipped.
+bool GroundHeight(float x, float y, float zFrom, float maxDrop, float &outZ) {
+	bool found = false;
+	float best = zFrom - maxDrop;
+	for (int cx = CellOf(x) - 1; cx <= CellOf(x) + 1; cx++)
+		for (int cy = CellOf(y) - 1; cy <= CellOf(y) + 1; cy++) {
+			auto g = gGrid.find(CellKey(cx, cy));
+			if (g == gGrid.end()) continue;
+			for (int idx : g->second) {
+				const Inst &in = gInsts[idx];
+				if (!in.col || IsBigBuilding(in)) continue;
+				float reach = in.col->bound.radius + std::sqrt(in.col->bound.center[0] * in.col->bound.center[0] + in.col->bound.center[1] * in.col->bound.center[1] +
+				                                              in.col->bound.center[2] * in.col->bound.center[2]) + 1.0f;
+				if (std::fabs(in.pos.x - x) > reach || std::fabs(in.pos.y - y) > reach) continue;
+				rw::V3d o = QuatRotate(in.rot, {x - in.pos.x, y - in.pos.y, zFrom - in.pos.z}, true);
+				rw::V3d d = QuatRotate(in.rot, {0, 0, -1}, true);
+				float tBest = zFrom - best; // only hits nearer than the current best are interesting
+				const std::vector<float> &vs = in.col->verts;
+				for (const sa::ColTri &t : in.col->tris) {
+					float h = RayTri(o, d, &vs[t.a * 3], &vs[t.b * 3], &vs[t.c * 3]);
+					if (h >= 0 && h < tBest) tBest = h;
+				}
+				for (const sa::ColBox &b : in.col->boxes) {
+					float h = RayBox(o, d, b);
+					if (h >= 0 && h < tBest) tBest = h;
+				}
+				if (tBest < zFrom - best) { best = zFrom - tBest; found = true; }
+			}
+		}
+	if (found) outZ = best;
+	return found;
+}
+
+// Walk mode (G): the camera is a point 1.7 m above the ground with gravity. DEVIATION: the original uses a ped with a collision
+// capsule, animations and physics; there is no horizontal collision here.
+bool gWalk = false;
+float gVelZ = 0.0f;
+
+void UpdateWalk(float dt) {
+	constexpr float kEye = 1.7f, kGravity = 20.0f, kStep = 1.0f, kMaxDrop = 60.0f;
+	float gz;
+	bool ground = GroundHeight(camPos.x, camPos.y, camPos.z - kEye + kStep, kMaxDrop, gz);
+	if (!ground) { gVelZ = 0.0f; return; } // no collision loaded here (yet): hold the height
+	float floorZ = gz + kEye;
+	if (camPos.z > floorZ + 0.02f) {
+		gVelZ -= kGravity * dt;
+		camPos.z += gVelZ * dt;
+		if (camPos.z < floorZ) { camPos.z = floorZ; gVelZ = 0.0f; }
+	} else {
+		camPos.z = floorZ;
+		gVelZ = 0.0f;
+	}
+}
+
 void UpdateStreaming(double now) {
 	for (size_t i = 0; i < gActive.size();) {
 		const Inst &in = gInsts[gActive[i]];
@@ -441,7 +533,8 @@ void UpdateStreaming(double now) {
 			ModelState &ms = kv.second;
 			if (ms.proto && ms.users == 0) DestroyProto(kv.first, ms);
 		}
-		fprintf(gLog, "clock %02d:%02d balance %.2f  ", (int)(gGameMinutes / 60), (int)gGameMinutes % 60, gDayNightBalance);
+		fprintf(gLog, "z=%.2f walk=%d ", camPos.z, (int)gWalk);
+			fprintf(gLog, "clock %02d:%02d balance %.2f  ", (int)(gGameMinutes / 60), (int)gGameMinutes % 60, gDayNightBalance);
 			fprintf(gLog, "t=%.0fs cam=(%.0f,%.0f) active=%zu protos=%d pending=%zu streamer: loaded=%zu %.1f MB queued=%zu\n", now, camPos.x,
 		        camPos.y, gActive.size(), (int)std::count_if(gModels.begin(), gModels.end(), [](auto &kv) { return kv.second.proto != nil; }),
 		        gPending.size(), gStreamer->LoadedCount(), gStreamer->LoadedBytes() / 1048576.0, gStreamer->PendingCount());
@@ -469,6 +562,7 @@ bool Initialize3D() {
 
 	gCamera = sk::CameraCreate(sk::globals.width, sk::globals.height, 1);
 	gCamera->setNearPlane(0.3f);
+	if (getenv("SA_WALK")) gWalk = atoi(getenv("SA_WALK")) != 0;
 	if (getenv("SA_FOV")) gFovDeg = (float)atof(getenv("SA_FOV"));
 	if (getenv("SA_HOUR")) gGameMinutes = (float)atof(getenv("SA_HOUR")) * 60.0f;
 	if (getenv("SA_WEATHER")) gWeather = atoi(getenv("SA_WEATHER"));
@@ -530,15 +624,21 @@ bool AttachPlugins() {
 void Idle(float dt) {
 	static auto start = std::chrono::steady_clock::now();
 	double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-	float speed = (sk::keys[sk::KEY_LSHIFT] ? 200.0f : 40.0f) * dt;
+	float speed = (gWalk ? (sk::keys[sk::KEY_LSHIFT] ? 9.0f : 5.0f) : (sk::keys[sk::KEY_LSHIFT] ? 200.0f : 40.0f)) * dt;
 	float yr = camYaw * 3.14159265f / 180.0f;
 	rw::V3d fwd = {std::sin(yr), std::cos(yr), 0.0f}, right = {std::cos(yr), -std::sin(yr), 0.0f};
 	if (sk::keys['W']) { camPos.x += fwd.x * speed; camPos.y += fwd.y * speed; }
 	if (sk::keys['S']) { camPos.x -= fwd.x * speed; camPos.y -= fwd.y * speed; }
 	if (sk::keys['D']) { camPos.x += right.x * speed; camPos.y += right.y * speed; }
 	if (sk::keys['A']) { camPos.x -= right.x * speed; camPos.y -= right.y * speed; }
-	if (sk::keys['E']) camPos.z += speed;
-	if (sk::keys['Q']) camPos.z -= speed;
+	static bool gDown = false;
+	if (sk::keys['G'] && !gDown) { gWalk = !gWalk; gVelZ = 0.0f; }
+	gDown = sk::keys['G'];
+	if (!gWalk) {
+		if (sk::keys['E']) camPos.z += speed;
+		if (sk::keys['Q']) camPos.z -= speed;
+	} else
+		UpdateWalk(dt);
 	if (const char *s = getenv("SA_AUTOFLY")) camPos.x += (float)atof(s) * dt; // scripted flight for testing
 	if (!(getenv("SA_CLOCK") && atoi(getenv("SA_CLOCK")) == 0)) gGameMinutes = std::fmod(gGameMinutes + dt * 1000.0f / kMsPerGameMinute, 1440.0f);
 	ApplyTimeOfDay();

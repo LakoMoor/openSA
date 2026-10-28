@@ -24,7 +24,8 @@ Early stage. This is a data and streaming layer plus viewers, not a playable gam
 | Vehicles: palette paint, wheels | partial: stock wheel per car and right-wheel orientation unverified |
 | Real `CRenderer` visibility/LOD rules | distance part done; culling pending; big-building rule from `CFileLoader`; LOD multiplier follows `CCamera::Process` and the rendering FOV (`SA_FOV`, default 70; during cutscenes the original uses 1.0, not applicable here) |
 | Time of day: `timecyc.dat` parsed, sky colour, fog, far clip and ambient follow `SA_HOUR` / `SA_WEATHER` (day/night vertex colours from the Extra Vert Colour plugin, balance curve verified in the exe; game clock runs 1 minute per second (`SA_CLOCK=0` freezes it); no sky dome, no weather changes) | partial |
-| Vehicle reflections, collision physics, peds, traffic, scripts, audio | not started |
+| Collision: COL2/3/4 geometry parsed (1.06 M triangles in gta3.img); walk mode (`G`) stands the camera on the ground via vertical ray tests, no horizontal collision, no ped | partial |
+| Vehicle reflections, vehicle and ped physics, peds, traffic, scripts, audio | not started |
 
 The goal is behaviour identical to the original game. Facts read from the executable are marked as such in
 the source comments (function names and addresses refer to the 1.0 US executable); everything else is an
@@ -43,7 +44,7 @@ cmake --build build/view --config Release --target sa_stream sa_world sa_view
 build\view\Release\sa_stream.exe "C:\Games\GTA San Andreas" 2495 -1690
 ```
 
-Controls: `W A S D` move, `Q`/`E` down/up, `Shift` faster, left mouse drag to look, `Esc` quits.
+Controls: `G` toggles walk mode (gravity, ground collision), `W A S D` move, `Q`/`E` down/up, `Shift` faster, left mouse drag to look, `Esc` quits.
 `sa_world.exe <gamedir> [x y radius]` shows a static slice of the map, `sa_view.exe <gamedir> [model]` shows one
 model (try `infernus`, `cheetah`, `banshee`).
 
