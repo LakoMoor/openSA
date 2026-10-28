@@ -1,5 +1,5 @@
 import pefile,capstone,struct,sys
-pe=pefile.PE('gta_sa.exe',fast_load=True)
+pe=pefile.PE('E:/openSA/gta_sa.exe',fast_load=True)
 base=pe.OPTIONAL_HEADER.ImageBase
 def rd(va,n):
     try: return pe.get_data(va-base,n)

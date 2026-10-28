@@ -765,7 +765,7 @@ void UpdateStreaming(double now) {
 // The ped is one or more skinned clumps that share the same animation (CJ: one per body part, each with its own copy of the skeleton).
 struct PedPart { rw::Clump *clump = nil; rw::HAnimHierarchy *hier = nil; };
 std::vector<PedPart> gPedParts;
-constexpr float kPedFollowDist = 4.0f, kPedFollowUp = 1.5f; // ASSUMED, above the ped origin
+constexpr float kPedFollowDist = 4.0f, kPedFollowUp = 0.6f; // up = table f0 at 0x8CC548 (exe-verified look-at height above the ped origin); dist = ASSUMED: the exe gives min(2.0 + zoom, 4.0) with the default zoom unknown (0xB6F0FC), 4.0 is only the cap
 
 // ped.ifp animation on the ped's hierarchy. Rotation keys replace the bone's local rotation, translation keys (root only) its position.
 // Key quaternions are used as stored (checked visually: conjugating them lays the ped on its side). ASSUMED: bones without a translation
