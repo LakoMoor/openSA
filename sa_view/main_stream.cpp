@@ -148,16 +148,17 @@ void DestroyProto(int id, ModelState &ms) {
 
 // "Extra Vert Colour" geometry plugin (id 0x253F2F9, CCustomBuildingDNPipeline 0x5D6DE0): u32 flag, then numVerts RGBA night colours.
 // The day colours are the geometry's own pre-lit colours.
-struct ExtraVertColour { rw::RGBA *night; };
+struct ExtraVertColour { rw::RGBA *night, *day; };
 int gExtraVertOffset = -1;
 constexpr rw::uint32 ID_EXTRAVERTCOLOUR = 0x253F2F9;
-float gDayNightBalance = 0.0f; // 0 = day colours, 1 = night colours (CCustomBuildingDNPipeline::m_fDNBalanceParam)
+float gDayNightBalance = -1.0f; // 0 = day colours, 1 = night colours (CCustomBuildingDNPipeline::m_fDNBalanceParam)
 
-void *CreateExtraVert(void *obj, rw::int32 off, rw::int32) { PLUGINOFFSET(ExtraVertColour, obj, off)->night = nil; return obj; }
+void *CreateExtraVert(void *obj, rw::int32 off, rw::int32) { PLUGINOFFSET(ExtraVertColour, obj, off)->night = nil; PLUGINOFFSET(ExtraVertColour, obj, off)->day = nil; return obj; }
 void *DestroyExtraVert(void *obj, rw::int32 off, rw::int32) {
 	ExtraVertColour *e = PLUGINOFFSET(ExtraVertColour, obj, off);
 	free(e->night);
-	e->night = nil;
+	free(e->day);
+	e->night = e->day = nil;
 	return obj;
 }
 rw::Stream *ReadExtraVert(rw::Stream *st, rw::int32 len, void *obj, rw::int32 off, rw::int32) {
@@ -169,6 +170,7 @@ rw::Stream *ReadExtraVert(rw::Stream *st, rw::int32 len, void *obj, rw::int32 of
 		ExtraVertColour *e = PLUGINOFFSET(ExtraVertColour, obj, off);
 		e->night = (rw::RGBA *)malloc(bytes);
 		st->read8(e->night, (rw::uint32)bytes);
+		if (g->colors) { e->day = (rw::RGBA *)malloc(bytes); memcpy(e->day, g->colors, bytes); }
 		len -= (rw::int32)(4 + bytes);
 	} else
 		len -= 4;
@@ -178,16 +180,47 @@ rw::Stream *ReadExtraVert(rw::Stream *st, rw::int32 len, void *obj, rw::int32 of
 rw::Stream *WriteExtraVert(rw::Stream *st, rw::int32, void *, rw::int32, rw::int32) { return st; }
 rw::int32 SizeExtraVert(void *, rw::int32, rw::int32) { return 0; }
 
-// lerp(day, night, balance) written into the geometry's colours; called once per prototype
+// lerp(day, night, balance) written into the geometry's colours (re-instanced on the next render)
 void ApplyDayNight(rw::Clump *c) {
 	FORLIST(lnk, c->atomics) {
 		rw::Geometry *g = rw::Atomic::fromClump(lnk)->geometry;
 		ExtraVertColour *e = PLUGINOFFSET(ExtraVertColour, g, gExtraVertOffset);
-		if (!e->night || !g->colors) continue;
+		if (!e->night || !e->day || !g->colors) continue;
+		g->lock(rw::Geometry::LOCKPRELIGHT);
 		for (int i = 0; i < g->numVertices; i++) {
-			rw::uint8 *d = (rw::uint8 *)&g->colors[i], *n = (rw::uint8 *)&e->night[i];
-			for (int k = 0; k < 3; k++) d[k] = (rw::uint8)(d[k] + (n[k] - d[k]) * gDayNightBalance);
+			rw::uint8 *o = (rw::uint8 *)&g->colors[i], *d = (rw::uint8 *)&e->day[i], *n = (rw::uint8 *)&e->night[i];
+			for (int k = 0; k < 3; k++) o[k] = (rw::uint8)(d[k] + (n[k] - d[k]) * gDayNightBalance);
 		}
+		g->unlock();
+	}
+}
+
+// Game clock. CClock::Update (0x52CF10): one game minute passes per ms_nMillisecondsPerGameMinute of game time.
+// The value is runtime-set (0 in the exe image); 1000 is taken from gta-reversed. SA_CLOCK=0 freezes the clock.
+constexpr float kMsPerGameMinute = 1000.0f;
+float gGameMinutes = 12.0f * 60.0f; // minutes since midnight
+int gWeather = 0;
+sa::Timecyc gTimecyc;
+rw::Light *gAmbient = nil;
+
+// timecyc sample + day/night balance for the current game time
+void ApplyTimeOfDay() {
+	float hour = gGameMinutes / 60.0f;
+	gTc = gTimecyc.Sample(gWeather, hour);
+	if (gTc.ok) {
+		gFarClip = std::min(gTc.farClip, 1000.0f);
+		Background = {(uint8_t)gTc.skyBottom[0], (uint8_t)gTc.skyBottom[1], (uint8_t)gTc.skyBottom[2], 255};
+		gCamera->setFarPlane(gFarClip);
+		gCamera->fogPlane = std::min(gTc.fogStart, gFarClip - 1.0f);
+		if (gAmbient) gAmbient->setColor(gTc.ambientObj[0] / 255.0f, gTc.ambientObj[1] / 255.0f, gTc.ambientObj[2] / 255.0f);
+	}
+	// CCustomBuildingRenderer::UpdateDayNightBalanceParam (0x5D7F80); shape taken from gta-reversed (not re-verified in the exe)
+	float m = gGameMinutes;
+	float bal = m < 360.0f ? 1.0f : m < 420.0f ? (420.0f - m) / 60.0f : m < 1200.0f ? 0.0f : m >= 1260.0f ? 1.0f : 1.0f - (1260.0f - m) / 60.0f;
+	if (std::fabs(bal - gDayNightBalance) > 0.004f || gDayNightBalance < 0.0f) {
+		gDayNightBalance = bal;
+		for (auto &kv : gModels)
+			if (kv.second.proto) ApplyDayNight(kv.second.proto);
 	}
 }
 
@@ -403,7 +436,8 @@ void UpdateStreaming(double now) {
 			ModelState &ms = kv.second;
 			if (ms.proto && ms.users == 0) DestroyProto(kv.first, ms);
 		}
-		fprintf(gLog, "t=%.0fs cam=(%.0f,%.0f) active=%zu protos=%d pending=%zu streamer: loaded=%zu %.1f MB queued=%zu\n", now, camPos.x,
+		fprintf(gLog, "clock %02d:%02d balance %.2f  ", (int)(gGameMinutes / 60), (int)gGameMinutes % 60, gDayNightBalance);
+			fprintf(gLog, "t=%.0fs cam=(%.0f,%.0f) active=%zu protos=%d pending=%zu streamer: loaded=%zu %.1f MB queued=%zu\n", now, camPos.x,
 		        camPos.y, gActive.size(), (int)std::count_if(gModels.begin(), gModels.end(), [](auto &kv) { return kv.second.proto != nil; }),
 		        gPending.size(), gStreamer->LoadedCount(), gStreamer->LoadedBytes() / 1048576.0, gStreamer->PendingCount());
 		fflush(gLog);
@@ -430,33 +464,17 @@ bool Initialize3D() {
 
 	gCamera = sk::CameraCreate(sk::globals.width, sk::globals.height, 1);
 	gCamera->setNearPlane(0.3f);
-	{
-		// time of day / weather: SA_HOUR (default 12), SA_WEATHER (default 0 = EXTRASUNNY_LA)
-		sa::Timecyc tc;
-		float hour = getenv("SA_HOUR") ? (float)atof(getenv("SA_HOUR")) : 12.0f;
-		int weather = getenv("SA_WEATHER") ? atoi(getenv("SA_WEATHER")) : 0;
-		if (tc.Load(gameDir + "/data/timecyc.dat")) gTc = tc.Sample(weather, hour);
-		if (gTc.ok) {
-			gFarClip = std::min(gTc.farClip, 1000.0f);
-			Background = {(uint8_t)gTc.skyBottom[0], (uint8_t)gTc.skyBottom[1], (uint8_t)gTc.skyBottom[2], 255};
-		}
-		fprintf(gLog, "timecyc: hour %.1f weather %d ok=%d farClip=%.0f fogStart=%.0f sky bottom=(%.0f,%.0f,%.0f)\n", hour, weather, (int)gTc.ok, gFarClip,
-		        gTc.fogStart, gTc.skyBottom[0], gTc.skyBottom[1], gTc.skyBottom[2]);
-	}
-	{
-		// CCustomBuildingRenderer::UpdateDayNightBalanceParam (0x5D7F80); shape taken from gta-reversed (not re-verified in the exe)
-		float hour = getenv("SA_HOUR") ? (float)atof(getenv("SA_HOUR")) : 12.0f, m = hour * 60.0f;
-		gDayNightBalance = m < 360.0f ? 1.0f : m < 420.0f ? (420.0f - m) / 60.0f : m < 1200.0f ? 0.0f : m >= 1260.0f ? 1.0f : 1.0f - (1260.0f - m) / 60.0f;
-		fprintf(gLog, "day/night balance %.2f\n", gDayNightBalance);
-	}
-	gCamera->setFarPlane(gFarClip);
-	gCamera->fogPlane = gTc.ok ? std::min(gTc.fogStart, gFarClip - 1.0f) : gFarClip * 0.5f;
+	if (getenv("SA_HOUR")) gGameMinutes = (float)atof(getenv("SA_HOUR")) * 60.0f;
+	if (getenv("SA_WEATHER")) gWeather = atoi(getenv("SA_WEATHER"));
+	gTimecyc.Load(gameDir + "/data/timecyc.dat");
 	gCamera->setFOV(kFovDeg, (float)sk::globals.width / sk::globals.height);
 	gWorld->addCamera(gCamera);
 
 	rw::Light *amb = rw::Light::create(rw::Light::AMBIENT);
-	if (gTc.ok) amb->setColor(gTc.ambientObj[0] / 255.0f, gTc.ambientObj[1] / 255.0f, gTc.ambientObj[2] / 255.0f);
-	else amb->setColor(0.65f, 0.65f, 0.7f);
+	amb->setColor(0.65f, 0.65f, 0.7f);
+	gAmbient = amb;
+	ApplyTimeOfDay();
+	fprintf(gLog, "timecyc: minute-of-day %.0f weather %d ok=%d farClip=%.0f fogStart=%.0f\n", gGameMinutes, gWeather, (int)gTc.ok, gFarClip, gTc.fogStart);
 	gWorld->addLight(amb);
 	rw::Light *sun = rw::Light::create(rw::Light::DIRECTIONAL);
 	sun->setColor(0.6f, 0.6f, 0.55f);
@@ -516,6 +534,8 @@ void Idle(float dt) {
 	if (sk::keys['E']) camPos.z += speed;
 	if (sk::keys['Q']) camPos.z -= speed;
 	if (const char *s = getenv("SA_AUTOFLY")) camPos.x += (float)atof(s) * dt; // scripted flight for testing
+	if (!(getenv("SA_CLOCK") && atoi(getenv("SA_CLOCK")) == 0)) gGameMinutes = std::fmod(gGameMinutes + dt * 1000.0f / kMsPerGameMinute, 1440.0f);
+	ApplyTimeOfDay();
 	UpdateStreaming(now);
 	UpdateCamera();
 	gCamera->clear(&Background, rw::Camera::CLEARIMAGE | rw::Camera::CLEARZ);
