@@ -23,7 +23,8 @@ Early stage. This is a data and streaming layer plus viewers, not a playable gam
 | `sa_stream`: whole-map viewer that streams models and textures around a free camera, with LOD | done; distance/LOD rule follows `SetupMapEntityVisibility` (colModel radius from COL headers; no occlusion, tunnels or fade yet) |
 | Vehicles: palette paint, wheels | partial: stock wheel per car and right-wheel orientation unverified |
 | Real `CRenderer` visibility/LOD rules | distance part done; FOV-based LOD multiplier, big-building flag, culling pending |
-| Time of day, timecyc, fog, reflections, collision, peds, traffic, scripts, audio | not started |
+| Time of day: `timecyc.dat` parsed, sky colour, fog, far clip and ambient follow `SA_HOUR` / `SA_WEATHER` (no sky dome, no per-vertex day/night lighting, no weather changes) | partial |
+| Vehicle reflections, collision physics, peds, traffic, scripts, audio | not started |
 
 The goal is behaviour identical to the original game. Facts read from the executable are marked as such in
 the source comments (function names and addresses refer to the 1.0 US executable); everything else is an

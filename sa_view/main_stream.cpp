@@ -17,6 +17,7 @@
 
 #include "BinaryIpl.h"
 #include "ColBounds.h"
+#include "Timecyc.h"
 #include "Streamer.h"
 #include "StreamingWorld.h"
 
@@ -45,6 +46,8 @@ struct ModelState {
 rw::World *gWorld;
 rw::Camera *gCamera;
 rw::RGBA Background = {120, 160, 210, 255};
+float gFarClip = 800.0f; // CTimeCycle far clip of the current hour/weather (clamped to 1000 like CTimeCycle::Update)
+sa::TimecycKey gTc;
 
 std::string gameDir;
 float centerX = 2495.0f, centerY = -1690.0f, loadRadius = 1000.0f; // cap on any model's draw distance
@@ -283,7 +286,7 @@ int gLoadedModels = 0;
 constexpr float kFading = 20.0f, kStreamMargin = 50.0f, kLowLodDistance = 150.0f, kLodDistMult = 1.0f, kLowLodDistScale = 1.0f;
 
 float DrawLimit(const Inst &in, float &fading) {
-	float farClip = loadRadius * 1.2f;
+	float farClip = gFarClip;
 	float d = std::min(kLodDistMult * in.drawDist, farClip + in.colRadius);
 	fading = kFading;
 	if (in.lodParent < 0) {
@@ -310,7 +313,7 @@ void UpdateStreaming(double now) {
 	}
 	// request / place what came close
 	int budget = 200;
-	float reach = loadRadius * 1.2f + kStreamMargin;
+	float reach = gFarClip + 400.0f + kStreamMargin; // 400: room for the colModel radius
 	int c0x = CellOf(camPos.x - reach), c1x = CellOf(camPos.x + reach);
 	int c0y = CellOf(camPos.y - reach), c1y = CellOf(camPos.y + reach);
 	for (int cx = c0x; cx <= c1x; cx++)
@@ -375,12 +378,27 @@ bool Initialize3D() {
 
 	gCamera = sk::CameraCreate(sk::globals.width, sk::globals.height, 1);
 	gCamera->setNearPlane(0.3f);
-	gCamera->setFarPlane(loadRadius * 1.2f);
+	{
+		// time of day / weather: SA_HOUR (default 12), SA_WEATHER (default 0 = EXTRASUNNY_LA)
+		sa::Timecyc tc;
+		float hour = getenv("SA_HOUR") ? (float)atof(getenv("SA_HOUR")) : 12.0f;
+		int weather = getenv("SA_WEATHER") ? atoi(getenv("SA_WEATHER")) : 0;
+		if (tc.Load(gameDir + "/data/timecyc.dat")) gTc = tc.Sample(weather, hour);
+		if (gTc.ok) {
+			gFarClip = std::min(gTc.farClip, 1000.0f);
+			Background = {(uint8_t)gTc.skyBottom[0], (uint8_t)gTc.skyBottom[1], (uint8_t)gTc.skyBottom[2], 255};
+		}
+		fprintf(gLog, "timecyc: hour %.1f weather %d ok=%d farClip=%.0f fogStart=%.0f sky bottom=(%.0f,%.0f,%.0f)\n", hour, weather, (int)gTc.ok, gFarClip,
+		        gTc.fogStart, gTc.skyBottom[0], gTc.skyBottom[1], gTc.skyBottom[2]);
+	}
+	gCamera->setFarPlane(gFarClip);
+	gCamera->fogPlane = gTc.ok ? std::min(gTc.fogStart, gFarClip - 1.0f) : gFarClip * 0.5f;
 	gCamera->setFOV(70.0f, (float)sk::globals.width / sk::globals.height);
 	gWorld->addCamera(gCamera);
 
 	rw::Light *amb = rw::Light::create(rw::Light::AMBIENT);
-	amb->setColor(0.65f, 0.65f, 0.7f);
+	if (gTc.ok) amb->setColor(gTc.ambientObj[0] / 255.0f, gTc.ambientObj[1] / 255.0f, gTc.ambientObj[2] / 255.0f);
+	else amb->setColor(0.65f, 0.65f, 0.7f);
 	gWorld->addLight(amb);
 	rw::Light *sun = rw::Light::create(rw::Light::DIRECTIONAL);
 	sun->setColor(0.6f, 0.6f, 0.55f);
@@ -442,6 +460,8 @@ void Idle(float dt) {
 	UpdateCamera();
 	gCamera->clear(&Background, rw::Camera::CLEARIMAGE | rw::Camera::CLEARZ);
 	gCamera->beginUpdate();
+	rw::SetRenderState(rw::FOGENABLE, gTc.ok);
+	rw::SetRenderState(rw::FOGCOLOR, (uint32_t)(Background.red | Background.green << 8 | Background.blue << 16 | 0xFF000000u));
 	rw::SetRenderState(rw::ALPHATESTFUNC, rw::ALPHAGREATEREQUAL);
 	rw::SetRenderState(rw::ALPHATESTREF, 100);
 	gWorld->render();

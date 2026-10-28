@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
 project(sa_port CXX)
 set(CMAKE_CXX_STANDARD 17)
-add_library(sa_data src/ImgV2.cpp src/TextData.cpp src/BinaryIpl.cpp src/RwChunks.cpp src/StreamingWorld.cpp src/Streamer.cpp src/ColBounds.cpp)
+add_library(sa_data src/ImgV2.cpp src/TextData.cpp src/BinaryIpl.cpp src/RwChunks.cpp src/StreamingWorld.cpp src/Streamer.cpp src/ColBounds.cpp src/Timecyc.cpp)
 target_include_directories(sa_data PUBLIC src)
 add_executable(streaming_ids_check src/streaming_ids_check.cpp)
 add_executable(img_ls src/img_ls.cpp)
