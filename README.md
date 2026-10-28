@@ -20,9 +20,9 @@ Early stage. This is a data and streaming layer plus viewers, not a playable gam
 | IMG v2, `gta.dat`/`default.dat`, all IDE sections, text + binary IPL, DFF/TXD loading | done; the whole stock game parses without errors |
 | Streaming slot layout (`CStreaming::LoadCdDirectory`), pool sizes (`CPools::Initialise`), TXD slots | done, taken from the decompiled executable |
 | Streamer (request / load / remove, model → TXD → parent TXD chain) | done (synchronous, no loading channels or memory budget yet) |
-| `sa_stream`: whole-map viewer that streams models and textures around a free camera, with LOD | done, visibility rule is a heuristic |
+| `sa_stream`: whole-map viewer that streams models and textures around a free camera, with LOD | done; distance/LOD rule follows `SetupMapEntityVisibility` (no colModel radius, occlusion, tunnels or fade yet) |
 | Vehicles: palette paint, wheels | partial: stock wheel per car and right-wheel orientation unverified |
-| Real `CRenderer` visibility/LOD rules | in progress |
+| Real `CRenderer` visibility/LOD rules | distance part done; FOV-based LOD multiplier, big-building flag, culling pending |
 | Time of day, timecyc, fog, reflections, collision, peds, traffic, scripts, audio | not started |
 
 The goal is behaviour identical to the original game. Facts read from the executable are marked as such in

@@ -28,9 +28,10 @@ struct Inst {
 	rw::V3d pos;
 	rw::Quat rot;
 	rw::Clump *clump = nil;
-	float range = 0;         // draw distance of the model (capped)
+	float drawDist = 0;      // ObjectDef draw distance (first of the IDE distances)
 	int lodParent = -1;      // instance that stands in for this one at a distance
-	int activeChildren = 0;  // placed instances that reference this one as their LOD
+	int numLodChildren = 0;  // instances that reference this one as their LOD (CEntity +0x34)
+	int activeChildren = 0;  // of those, currently placed (CEntity +0x35 "rendered")
 };
 
 struct ModelState {
@@ -177,7 +178,7 @@ void CollectPlacements() {
 		i.id = id;
 		i.pos = {x, y, z};
 		i.rot = {-q[0], -q[1], -q[2], q[3]}; // IPL quaternions are stored conjugated
-		i.range = std::min(std::max(d->drawDist[0], 30.0f), kMaxRange);
+		i.drawDist = d->drawDist[0];
 		int idx = (int)gInsts.size();
 		gGrid[CellKey(CellOf(x), CellOf(y))].push_back(idx);
 		gInsts.push_back(i);
@@ -223,7 +224,8 @@ void CollectPlacements() {
 		}
 	}
 	int withParent = 0;
-	for (auto &i : gInsts) withParent += i.lodParent >= 0;
+	for (auto &i : gInsts)
+		if (i.lodParent >= 0) { withParent++; gInsts[i.lodParent].numLodChildren++; }
 	fprintf(gLog, "LOD links: %d of %zu instances have a LOD parent\n", withParent, gInsts.size());
 }
 
@@ -256,28 +258,52 @@ void Unplace(size_t activePos) {
 double gNextLog = 0;
 int gLoadedModels = 0;
 
+// CRenderer::SetupMapEntityVisibility (0x553F60), distance part. Differences from the original:
+// colModel radius is 0 (COL not loaded), lodDistMultiplier is 1 (original: from camera FOV), the "big building" flag
+// is approximated by "LOD parent of other instances", no occlusion/tunnel/on-screen test, no alpha fade.
+constexpr float kFading = 20.0f, kStreamMargin = 50.0f, kLowLodDistance = 150.0f, kLodDistMult = 1.0f, kLowLodDistScale = 1.0f;
+
+float DrawLimit(const Inst &in, float &fading) {
+	float farClip = loadRadius * 1.2f;
+	float d = std::min(kLodDistMult * in.drawDist, farClip);
+	fading = kFading;
+	if (in.lodParent < 0) {
+		float f = std::min(in.drawDist, d);
+		if (f > kLowLodDistance) fading = f / 15.0f + 10.0f;
+		if (in.numLodChildren > 0) d *= kLowLodDistScale;
+	}
+	return d;
+}
+
+float Dist3(const Inst &in) {
+	float dx = in.pos.x - camPos.x, dy = in.pos.y - camPos.y, dz = in.pos.z - camPos.z;
+	return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+// a LOD parent with several children is replaced by them once all of them are rendered (CRenderer::ProcessLodRenderLists)
+bool CoveredByChildren(const Inst &in) { return in.numLodChildren > 1 && in.activeChildren >= in.numLodChildren; }
+
 void UpdateStreaming(double now) {
-	// drop what is too far, and LOD stand-ins whose detailed children are showing
 	for (size_t i = 0; i < gActive.size();) {
 		const Inst &in = gInsts[gActive[i]];
-		float dx = in.pos.x - camPos.x, dy = in.pos.y - camPos.y;
-		float u = std::min(in.range, loadRadius) * 1.15f;
-		if (dx * dx + dy * dy > u * u || in.activeChildren > 0) Unplace(i); else i++;
+		float fading, d = DrawLimit(in, fading);
+		if (Dist3(in) - kFading >= d || CoveredByChildren(in)) Unplace(i); else i++;
 	}
 	// request / place what came close
 	int budget = 200;
-	int c0x = CellOf(camPos.x - loadRadius), c1x = CellOf(camPos.x + loadRadius);
-	int c0y = CellOf(camPos.y - loadRadius), c1y = CellOf(camPos.y + loadRadius);
+	float reach = loadRadius * 1.2f + kStreamMargin;
+	int c0x = CellOf(camPos.x - reach), c1x = CellOf(camPos.x + reach);
+	int c0y = CellOf(camPos.y - reach), c1y = CellOf(camPos.y + reach);
 	for (int cx = c0x; cx <= c1x; cx++)
 		for (int cy = c0y; cy <= c1y; cy++) {
 			auto g = gGrid.find(CellKey(cx, cy));
 			if (g == gGrid.end()) continue;
 			for (int idx : g->second) {
 				Inst &in = gInsts[idx];
-				if (in.clump || in.activeChildren > 0) continue;
-				float dx = in.pos.x - camPos.x, dy = in.pos.y - camPos.y;
-				float r = std::min(in.range, loadRadius);
-				if (dx * dx + dy * dy > r * r) continue;
+				if (in.clump) continue;
+				float fading, d = DrawLimit(in, fading), dist = Dist3(in);
+				if (dist - kStreamMargin >= d) continue; // outside the request margin
+				bool drawable = dist - kFading < d && !CoveredByChildren(in);
 				ModelState &ms = gModels[in.id];
 				if (ms.failed) continue;
 				if (!ms.proto) {
@@ -288,7 +314,7 @@ void UpdateStreaming(double now) {
 					}
 					continue;
 				}
-				if (budget-- > 0) Place(idx, ms);
+				if (drawable && budget-- > 0) Place(idx, ms);
 			}
 		}
 	gLoadedModels += gStreamer->Process(3);
