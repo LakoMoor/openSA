@@ -23,7 +23,7 @@ Early stage. This is a data and streaming layer plus viewers, not a playable gam
 | `sa_stream`: whole-map viewer that streams models and textures around a free camera, with LOD | done; distance/LOD rule follows `SetupMapEntityVisibility` (colModel radius from COL headers; no occlusion, tunnels or fade yet) |
 | Vehicles: palette paint, wheels | partial: stock wheel per car and right-wheel orientation unverified |
 | Real `CRenderer` visibility/LOD rules | distance part done; culling pending; big-building rule from `CFileLoader`; LOD multiplier follows `CCamera::Process` (FOV assumed 70) |
-| Time of day: `timecyc.dat` parsed, sky colour, fog, far clip and ambient follow `SA_HOUR` / `SA_WEATHER` (day/night vertex colours from the Extra Vert Colour plugin, balance curve from gta-reversed; game clock runs 1 minute per second (`SA_CLOCK=0` freezes it); no sky dome, no weather changes) | partial |
+| Time of day: `timecyc.dat` parsed, sky colour, fog, far clip and ambient follow `SA_HOUR` / `SA_WEATHER` (day/night vertex colours from the Extra Vert Colour plugin, balance curve verified in the exe; game clock runs 1 minute per second (`SA_CLOCK=0` freezes it); no sky dome, no weather changes) | partial |
 | Vehicle reflections, collision physics, peds, traffic, scripts, audio | not started |
 
 The goal is behaviour identical to the original game. Facts read from the executable are marked as such in

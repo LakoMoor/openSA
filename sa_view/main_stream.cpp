@@ -214,7 +214,7 @@ void ApplyTimeOfDay() {
 		gCamera->fogPlane = std::min(gTc.fogStart, gFarClip - 1.0f);
 		if (gAmbient) gAmbient->setColor(gTc.ambientObj[0] / 255.0f, gTc.ambientObj[1] / 255.0f, gTc.ambientObj[2] / 255.0f);
 	}
-	// CCustomBuildingRenderer::UpdateDayNightBalanceParam (0x5D7F80); shape taken from gta-reversed (not re-verified in the exe)
+	// CCustomBuildingRenderer::UpdateDayNightBalanceParam (0x5D7F80); decompiled in the exe, curve identical
 	float m = gGameMinutes;
 	float bal = m < 360.0f ? 1.0f : m < 420.0f ? (420.0f - m) / 60.0f : m < 1200.0f ? 0.0f : m >= 1260.0f ? 1.0f : 1.0f - (1260.0f - m) / 60.0f;
 	if (std::fabs(bal - gDayNightBalance) > 0.004f || gDayNightBalance < 0.0f) {
