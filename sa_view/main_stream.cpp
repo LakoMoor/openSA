@@ -1071,8 +1071,8 @@ void Idle(float dt) {
 	bool autoJump = getenv("SA_AUTOJUMP") && now > 12.0 && !autoJumped;
 	if (autoJump) autoJumped = true;
 	if (gWalk && gGrounded && ((sk::keys[sk::KEY_LSHIFT] && !jumpDown) || autoJump)) {
-		// CTaskSimpleJump::Launch: force 8.5 on a 70 kg ped = 8.5/70 per tick (x50 ticks/s); horizontal 0.1 standing, 0.17 running, 0.22 sprinting.
-		// ASSUMED: those values from gta-reversed (not re-read in the exe); fat/muscle modifier 1.
+		// CTaskSimpleJump::Launch (0x679B80): player force 8.5 (@0x8703C0) on a 70 kg ped (CPed ctor, 0x5E82A4) = 8.5/70 per tick (x50 ticks/s);
+		// horizontal 0.1 / 0.17 / 0.22 (@0x8703B0..B8) standing / running / sprinting. All read in the exe. ASSUMED: fat/muscle modifier 1.
 		float h = !anyMove ? 0.1f : sk::keys[sk::KEY_LALT] ? 0.1f : sk::keys[' '] ? 0.22f : 0.17f;
 		gVelZ = 8.5f / 70.0f * 50.0f;
 		gAirVx = fwd.x * h * 50.0f;
