@@ -768,6 +768,9 @@ std::unordered_map<std::string, sa::IfpAnim> gAnims;
 const sa::IfpAnim *gPedAnim = nil;
 std::vector<rw::V3d> gBindPos;
 float gAnimTime = 0.0f;
+bool gAnimLoop = true;
+float gLandTimer = 0.0f, gLaunchTimer = 0.0f; // launch timer: > 0 while jump_launch plays // > 0 while jump_land plays after touching down
+bool gWasAirborne = false;
 
 void LoadPedAnims() {
 	std::ifstream f(gameDir + "/anim/ped.ifp", std::ios::binary);
@@ -813,17 +816,27 @@ float ClipSpeed(const char *name) {
 	return 0.0f;
 }
 
-void SelectPedAnim(const char *name) {
+void SelectPedAnim(const char *name, bool loop = true) {
 	auto it = gAnims.find(name);
 	if (it != gAnims.end() && gPedAnim != &it->second) { gPedAnim = &it->second; gAnimTime = 0.0f; }
+	gAnimLoop = loop;
 }
 
 void AnimatePed(float dt) {
 	// DEVIATION: the original blends clips through the ped task system; this just switches between idle / walk / run
 	bool moving = sk::keys['W'] || sk::keys['A'] || sk::keys['S'] || sk::keys['D'];
-	SelectPedAnim(gWalk && gSwimming ? "swim_tread" : gWalk && !gGrounded ? "jump_glide" : PedClip(moving)); // DEVIATION: no launch/land clips or blending; the swim_swim/crawl clips live in anim.img (not loaded), so moving also plays swim_tread
+	// jump: jump_launch (once) -> jump_glide while airborne -> jump_land (once) after touching down. DEVIATION: no blending between clips.
+	bool air = gWalk && !gGrounded && !gSwimming;
+	if (gWasAirborne && !air && gWalk && !gSwimming) { auto it = gAnims.find("jump_land"); gLandTimer = it != gAnims.end() ? it->second.duration : 0.0f; }
+	gWasAirborne = air;
+	if (gLandTimer > 0.0f) gLandTimer -= dt;
+	if (gLaunchTimer > 0.0f) gLaunchTimer -= dt;
+	if (gWalk && gSwimming) SelectPedAnim("swim_tread"); // the swim_swim/crawl clips live in anim.img (not loaded), so moving also plays swim_tread
+	else if (air) SelectPedAnim(gLaunchTimer > 0.0f ? "jump_launch" : "jump_glide", gLaunchTimer <= 0.0f);
+	else if (gLandTimer > 0.0f) SelectPedAnim("jump_land", false);
+	else SelectPedAnim(PedClip(moving));
 	if (gPedParts.empty() || !gPedAnim || gPedAnim->duration <= 0) return;
-	gAnimTime = std::fmod(gAnimTime + dt, gPedAnim->duration);
+	gAnimTime = gAnimLoop ? std::fmod(gAnimTime + dt, gPedAnim->duration) : std::min(gAnimTime + dt, gPedAnim->duration);
 	for (PedPart &part : gPedParts) {
 		if (!part.hier) continue;
 		for (const sa::IfpSeq &sq : gPedAnim->seqs) {
@@ -1162,6 +1175,8 @@ void Idle(float dt) {
 		gAirVx = fwd.x * h * 50.0f;
 		gAirVy = fwd.y * h * 50.0f;
 		gGrounded = false;
+		auto lj = gAnims.find("jump_launch");
+		gLaunchTimer = lj != gAnims.end() ? lj->second.duration : 0.0f;
 	}
 	jumpDown = sk::keys[sk::KEY_LSHIFT];
 	if (gWalk && gSwimming) {
