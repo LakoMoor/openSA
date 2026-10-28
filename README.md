@@ -24,7 +24,7 @@ Early stage. This is a data and streaming layer plus viewers, not a playable gam
 | Vehicles: palette paint, wheels | partial: stock wheel per car and right-wheel orientation unverified |
 | Real `CRenderer` visibility/LOD rules | distance part done; culling pending; big-building rule from `CFileLoader`; LOD multiplier follows `CCamera::Process` and the rendering FOV (`SA_FOV`, default 70; during cutscenes the original uses 1.0, not applicable here) |
 | Time of day: `timecyc.dat` parsed, sky colour, fog, far clip and ambient follow `SA_HOUR` / `SA_WEATHER` (day/night vertex colours from the Extra Vert Colour plugin, balance curve verified in the exe; game clock runs 1 minute per second (`SA_CLOCK=0` freezes it); no sky dome, no weather changes) | partial |
-| Collision: COL2/3/4 geometry parsed (1.06 M triangles in gta3.img); walk mode (`G`) stands the camera on the ground via vertical ray tests, no horizontal collision, no ped | partial |
+| Collision: COL2/3/4 geometry parsed (1.06 M triangles in gta3.img); walk mode (`G`): ground via vertical ray tests, walls via two body spheres (assumed size), no ped | partial |
 | Vehicle reflections, vehicle and ped physics, peds, traffic, scripts, audio | not started |
 
 The goal is behaviour identical to the original game. Facts read from the executable are marked as such in

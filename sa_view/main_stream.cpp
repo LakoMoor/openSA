@@ -466,8 +466,96 @@ bool GroundHeight(float x, float y, float zFrom, float maxDrop, float &outZ) {
 	return found;
 }
 
+// closest point on triangle abc to p (Ericson, Real-Time Collision Detection 5.1.5)
+rw::V3d ClosestOnTri(const rw::V3d &p, const float *A, const float *B, const float *C) {
+	auto sub = [](const float *x, const float *y) { return rw::V3d{x[0] - y[0], x[1] - y[1], x[2] - y[2]}; };
+	auto dot = [](const rw::V3d &x, const rw::V3d &y) { return x.x * y.x + x.y * y.y + x.z * y.z; };
+	rw::V3d a = {A[0], A[1], A[2]}, ab = sub(B, A), ac = sub(C, A), ap = {p.x - a.x, p.y - a.y, p.z - a.z};
+	float d1 = dot(ab, ap), d2 = dot(ac, ap);
+	if (d1 <= 0 && d2 <= 0) return a;
+	rw::V3d bp = {p.x - B[0], p.y - B[1], p.z - B[2]};
+	float d3 = dot(ab, bp), d4 = dot(ac, bp);
+	if (d3 >= 0 && d4 <= d3) return {B[0], B[1], B[2]};
+	float vc = d1 * d4 - d3 * d2;
+	if (vc <= 0 && d1 >= 0 && d3 <= 0) { float v = d1 / (d1 - d3); return {a.x + ab.x * v, a.y + ab.y * v, a.z + ab.z * v}; }
+	rw::V3d cp = {p.x - C[0], p.y - C[1], p.z - C[2]};
+	float d5 = dot(ab, cp), d6 = dot(ac, cp);
+	if (d6 >= 0 && d5 <= d6) return {C[0], C[1], C[2]};
+	float vb = d5 * d2 - d1 * d6;
+	if (vb <= 0 && d2 >= 0 && d6 <= 0) { float w = d2 / (d2 - d6); return {a.x + ac.x * w, a.y + ac.y * w, a.z + ac.z * w}; }
+	float va = d3 * d6 - d5 * d4;
+	if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) {
+		float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+		return {B[0] + (C[0] - B[0]) * w, B[1] + (C[1] - B[1]) * w, B[2] + (C[2] - B[2]) * w};
+	}
+	float denom = 1.0f / (va + vb + vc), v = vb * denom, w = vc * denom;
+	return {a.x + ab.x * v + ac.x * w, a.y + ab.y * v + ac.y * w, a.z + ab.z * v + ac.z * w};
+}
+
+// Pushes a sphere out of the collision geometry of nearby instances; only the horizontal part of the push is applied and
+// near-horizontal (walkable) surfaces are ignored. Returns true if anything pushed.
+bool PushOutSphere(rw::V3d &c, float r) {
+	bool pushed = false;
+	for (int cx = CellOf(c.x - 3); cx <= CellOf(c.x + 3); cx++)
+		for (int cy = CellOf(c.y - 3); cy <= CellOf(c.y + 3); cy++) {
+			auto g = gGrid.find(CellKey(cx, cy));
+			if (g == gGrid.end()) continue;
+			for (int idx : g->second) {
+				const Inst &in = gInsts[idx];
+				if (!in.col || IsBigBuilding(in)) continue;
+				float reach = in.col->bound.radius + std::sqrt(in.col->bound.center[0] * in.col->bound.center[0] + in.col->bound.center[1] * in.col->bound.center[1] +
+				                                              in.col->bound.center[2] * in.col->bound.center[2]) + r + 0.5f;
+				float dx = in.pos.x - c.x, dy = in.pos.y - c.y, dz = in.pos.z - c.z;
+				if (dx * dx + dy * dy + dz * dz > reach * reach) continue;
+				rw::V3d lc = QuatRotate(in.rot, {c.x - in.pos.x, c.y - in.pos.y, c.z - in.pos.z}, true);
+				const std::vector<float> &vs = in.col->verts;
+				for (const sa::ColTri &t : in.col->tris) {
+					rw::V3d q = ClosestOnTri(lc, &vs[t.a * 3], &vs[t.b * 3], &vs[t.c * 3]);
+					rw::V3d d = {lc.x - q.x, lc.y - q.y, lc.z - q.z};
+					float dist2 = d.x * d.x + d.y * d.y + d.z * d.z;
+					if (dist2 >= r * r || dist2 < 1e-12f) continue;
+					rw::V3d wd = QuatRotate(in.rot, d, false); // world-space push direction
+					float dist = std::sqrt(dist2), nz = std::fabs(wd.z) / dist;
+					if (nz > 0.7f) continue; // floor or ceiling, not a wall
+					float k = (r - dist) / dist;
+					c.x += wd.x * k; c.y += wd.y * k;
+					lc = QuatRotate(in.rot, {c.x - in.pos.x, c.y - in.pos.y, c.z - in.pos.z}, true);
+					pushed = true;
+				}
+				for (const sa::ColBox &b : in.col->boxes) {
+					rw::V3d q = {std::min(std::max(lc.x, b.min[0]), b.max[0]), std::min(std::max(lc.y, b.min[1]), b.max[1]), std::min(std::max(lc.z, b.min[2]), b.max[2])};
+					rw::V3d d = {lc.x - q.x, lc.y - q.y, lc.z - q.z};
+					float dist2 = d.x * d.x + d.y * d.y + d.z * d.z;
+					if (dist2 >= r * r || dist2 < 1e-12f) continue;
+					rw::V3d wd = QuatRotate(in.rot, d, false);
+					float dist = std::sqrt(dist2);
+					if (std::fabs(wd.z) / dist > 0.7f) continue;
+					float k = (r - dist) / dist;
+					c.x += wd.x * k; c.y += wd.y * k;
+					lc = QuatRotate(in.rot, {c.x - in.pos.x, c.y - in.pos.y, c.z - in.pos.z}, true);
+					pushed = true;
+				}
+			}
+		}
+	return pushed;
+}
+
+// two spheres (knee and chest height) approximate a standing body; radius 0.35 m. ASSUMED dimensions, not taken from the exe
+void CollideWalker() {
+	constexpr float kRadius = 0.35f, kEye = 1.7f;
+	const float heights[2] = {0.6f, 1.3f}; // above the feet (camera is kEye above the feet)
+	for (int iter = 0; iter < 3; iter++) {
+		bool any = false;
+		for (float h : heights) {
+			rw::V3d c = {camPos.x, camPos.y, camPos.z - kEye + h};
+			if (PushOutSphere(c, kRadius)) { camPos.x = c.x; camPos.y = c.y; any = true; }
+		}
+		if (!any) break;
+	}
+}
+
 // Walk mode (G): the camera is a point 1.7 m above the ground with gravity. DEVIATION: the original uses a ped with a collision
-// capsule, animations and physics; there is no horizontal collision here.
+// capsule, animations and physics; horizontal collision uses two spheres (CollideWalker) with assumed dimensions.
 bool gWalk = false;
 float gVelZ = 0.0f;
 
@@ -637,8 +725,10 @@ void Idle(float dt) {
 	if (!gWalk) {
 		if (sk::keys['E']) camPos.z += speed;
 		if (sk::keys['Q']) camPos.z -= speed;
-	} else
+	} else {
+		CollideWalker();
 		UpdateWalk(dt);
+	}
 	if (const char *s = getenv("SA_AUTOFLY")) camPos.x += (float)atof(s) * dt; // scripted flight for testing
 	if (!(getenv("SA_CLOCK") && atoi(getenv("SA_CLOCK")) == 0)) gGameMinutes = std::fmod(gGameMinutes + dt * 1000.0f / kMsPerGameMinute, 1440.0f);
 	ApplyTimeOfDay();
