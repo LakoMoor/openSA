@@ -641,13 +641,51 @@ void CollideWalker() {
 
 // Walk mode (G): the camera is a point 1.7 m above the ground with gravity. DEVIATION: the original uses a ped with a collision
 // capsule, animations and physics; horizontal collision uses the exe's three ped spheres (CollideWalker); only the eye height is assumed.
-bool gWalk = false, gGrounded = true;
+// Water height at (x, y) from the water.dat polygons (no waves), false when no polygon covers the point.
+std::vector<sa::WaterPoly> gWater;
+bool WaterLevelAt(float x, float y, float &z) {
+	for (const sa::WaterPoly &w : gWater) {
+		float minx = w.x[0], maxx = w.x[0], miny = w.y[0], maxy = w.y[0];
+		for (int i = 1; i < w.n; i++) { minx = std::min(minx, w.x[i]); maxx = std::max(maxx, w.x[i]); miny = std::min(miny, w.y[i]); maxy = std::max(maxy, w.y[i]); }
+		if (x < minx || x > maxx || y < miny || y > maxy) continue;
+		bool inside = true;
+		if (w.n == 3) { // the bounding box is not enough for a triangle: barycentric test
+			float d = (w.y[1] - w.y[2]) * (w.x[0] - w.x[2]) + (w.x[2] - w.x[1]) * (w.y[0] - w.y[2]);
+			if (std::fabs(d) > 1e-6f) {
+				float a = ((w.y[1] - w.y[2]) * (x - w.x[2]) + (w.x[2] - w.x[1]) * (y - w.y[2])) / d;
+				float b = ((w.y[2] - w.y[0]) * (x - w.x[2]) + (w.x[0] - w.x[2]) * (y - w.y[2])) / d;
+				inside = a >= 0 && b >= 0 && a + b <= 1;
+			}
+		}
+		if (!inside) continue;
+		z = 0.0f;
+		for (int i = 0; i < w.n; i++) z += w.z[i];
+		z /= w.n;
+		return true;
+	}
+	return false;
+}
+
+bool gWalk = false, gGrounded = true, gSwimming = false;
 float gVelZ = 0.0f, gAirVx = 0.0f, gAirVy = 0.0f;
 
 void UpdateWalk(float dt) {
 	constexpr float kOriginAboveFeet = 1.0f, kGravity = 20.0f, kStep = 1.0f, kMaxDrop = 60.0f; // 1.0 verified (ped box min z), 20 = 0.008 @0x863984
 	float gz;
 	bool ground = GroundHeight(camPos.x, camPos.y, camPos.z - kOriginAboveFeet + kStep, kMaxDrop, gz);
+	// Swimming. DEVIATION: the entry rule is a guess (water deeper than 1.3 m over the ground); the original starts CTaskSimpleSwim from the
+	// ped's water contact. Height follows CTaskSimpleSwim::ProcessSwimmingResistance: equilibrium origin = waterLevel - 0.55 when treading,
+	// vertical speed clamped to 0.1 per tick (5 m/s).
+	float wl;
+	// without loaded ground below, only an already-near-the-surface ped counts as swimming (water polygons also cover coastal land)
+	gSwimming = WaterLevelAt(camPos.x, camPos.y, wl) && (ground ? wl - gz > 1.3f : camPos.z <= wl + 2.0f);
+	if (gSwimming) {
+		float target = wl - 0.55f, dz = target - camPos.z, maxStep = 5.0f * dt;
+		camPos.z += std::max(-maxStep, std::min(maxStep, dz));
+		gVelZ = 0.0f;
+		gGrounded = false;
+		return;
+	}
 	if (!ground) { gVelZ = 0.0f; return; } // no collision loaded here (yet): hold the height
 	float floorZ = gz + kOriginAboveFeet;
 	gGrounded = camPos.z <= floorZ + 0.02f && gVelZ <= 0.0f;
@@ -783,7 +821,7 @@ void SelectPedAnim(const char *name) {
 void AnimatePed(float dt) {
 	// DEVIATION: the original blends clips through the ped task system; this just switches between idle / walk / run
 	bool moving = sk::keys['W'] || sk::keys['A'] || sk::keys['S'] || sk::keys['D'];
-	SelectPedAnim(gWalk && !gGrounded ? "jump_glide" : PedClip(moving)); // DEVIATION: no launch/land clips or blending
+	SelectPedAnim(gWalk && gSwimming ? "swim_tread" : gWalk && !gGrounded ? "jump_glide" : PedClip(moving)); // DEVIATION: no launch/land clips or blending; the swim_swim/crawl clips live in anim.img (not loaded), so moving also plays swim_tread
 	if (gPedParts.empty() || !gPedAnim || gPedAnim->duration <= 0) return;
 	gAnimTime = std::fmod(gAnimTime + dt, gPedAnim->duration);
 	for (PedPart &part : gPedParts) {
@@ -964,7 +1002,7 @@ bool Initialize3D() {
 	        gW.store.CountWithArchiveEntry());
 	fflush(gLog);
 
-	camPos = {centerX - 30.0f, centerY - 30.0f, 40.0f};
+	camPos = {centerX - 30.0f, centerY - 30.0f, getenv("SA_SPAWNZ") ? (float)atof(getenv("SA_SPAWNZ")) : 40.0f};
 	camYaw = getenv("SA_YAW") ? (float)atof(getenv("SA_YAW")) : 45.0f;
 	if (getenv("SA_PITCH")) camPitch = (float)atof(getenv("SA_PITCH"));
 	UpdatePed();
@@ -1063,7 +1101,6 @@ void DrawSky() {
 // Water polygons from data/water.dat, drawn as one flat translucent colour at their stored height.
 // DEVIATION: the original (CWaterLevel::RenderWater) animates waves, flow and foam with the water textures and timecyc water colour;
 // none of that is implemented, and the polygon colour here is a guess.
-std::vector<sa::WaterPoly> gWater;
 bool gWaterTried = false;
 
 void DrawWater() {
@@ -1117,7 +1154,7 @@ void Idle(float dt) {
 	static bool autoJumped = false; // test aid: SA_AUTOJUMP=1 jumps once after 12 s
 	bool autoJump = getenv("SA_AUTOJUMP") && now > 12.0 && !autoJumped;
 	if (autoJump) autoJumped = true;
-	if (gWalk && gGrounded && ((sk::keys[sk::KEY_LSHIFT] && !jumpDown) || autoJump)) {
+	if (gWalk && gGrounded && !gSwimming && ((sk::keys[sk::KEY_LSHIFT] && !jumpDown) || autoJump)) {
 		// CTaskSimpleJump::Launch (0x679B80): player force 8.5 (@0x8703C0) on a 70 kg ped (CPed ctor, 0x5E82A4) = 8.5/70 per tick (x50 ticks/s);
 		// horizontal 0.1 / 0.17 / 0.22 (@0x8703B0..B8) standing / running / sprinting. All read in the exe. ASSUMED: fat/muscle modifier 1.
 		float h = !anyMove ? 0.1f : sk::keys[sk::KEY_LALT] ? 0.1f : sk::keys[' '] ? 0.22f : 0.17f;
@@ -1127,7 +1164,13 @@ void Idle(float dt) {
 		gGrounded = false;
 	}
 	jumpDown = sk::keys[sk::KEY_LSHIFT];
-	if (gWalk && !gGrounded) {
+	if (gWalk && gSwimming) {
+		float sp = 2.0f * dt; // ASSUMED swim speed (the swim clips are not loaded)
+		if (sk::keys['W']) { camPos.x += fwd.x * sp; camPos.y += fwd.y * sp; }
+		if (sk::keys['S']) { camPos.x -= fwd.x * sp; camPos.y -= fwd.y * sp; }
+		if (sk::keys['D']) { camPos.x += right.x * sp; camPos.y += right.y * sp; }
+		if (sk::keys['A']) { camPos.x -= right.x * sp; camPos.y -= right.y * sp; }
+	} else if (gWalk && !gGrounded) {
 		camPos.x += gAirVx * dt;
 		camPos.y += gAirVy * dt;
 	} else {
