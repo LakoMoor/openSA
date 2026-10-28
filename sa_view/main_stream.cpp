@@ -919,6 +919,43 @@ bool AttachPlugins() {
 	return true;
 }
 
+// Sky gradient: timecyc sky-top colour at the top of the screen blending to sky-bottom at the horizon (the clear colour fills below it).
+// DEVIATION: the original (CClouds::Render) also draws the sun, moon, cloud layers and low-level clouds; none of that is implemented here.
+void DrawSky() {
+	if (!gTc.ok) return;
+	rw::Raster *r = gCamera->frameBuffer;
+	float W = (float)r->width, H = (float)r->height;
+	float tanHalf = gCamera->viewWindow.y;
+	float pitch = camPitch * 3.14159265f / 180.0f;
+	float horizon = H * 0.5f + std::tan(pitch) / tanHalf * H * 0.5f;
+	horizon = std::max(0.0f, std::min(H, horizon));
+	if (horizon <= 0.0f) return;
+	rw::RWDEVICE::Im2DVertex v[4];
+	float xs[4] = {0, W, 0, W}, ys[4] = {0, 0, horizon, horizon};
+	const float *col[4] = {gTc.skyTop, gTc.skyTop, gTc.skyBottom, gTc.skyBottom};
+	float recipZ = 1.0f / gCamera->nearPlane;
+	for (int i = 0; i < 4; i++) {
+		v[i].setScreenX(xs[i]);
+		v[i].setScreenY(ys[i]);
+		v[i].setScreenZ(rw::im2d::GetNearZ());
+		v[i].setCameraZ(gCamera->nearPlane);
+		v[i].setRecipCameraZ(recipZ);
+		v[i].setColor((uint8_t)col[i][0], (uint8_t)col[i][1], (uint8_t)col[i][2], 255);
+		v[i].setU(0, recipZ);
+		v[i].setV(0, recipZ);
+	}
+	rw::uint16 idx[6] = {0, 1, 2, 1, 3, 2};
+	rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
+	rw::SetRenderState(rw::ZTESTENABLE, 0);
+	rw::SetRenderState(rw::ZWRITEENABLE, 0);
+	rw::SetRenderState(rw::CULLMODE, rw::CULLNONE);
+	rw::SetRenderState(rw::FOGENABLE, 0);
+	rw::im2d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, v, 4, idx, 6);
+	rw::SetRenderState(rw::ZTESTENABLE, 1);
+	rw::SetRenderState(rw::ZWRITEENABLE, 1);
+	rw::SetRenderState(rw::CULLMODE, rw::CULLBACK);
+}
+
 void Idle(float dt) {
 	static auto start = std::chrono::steady_clock::now();
 	double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
@@ -949,6 +986,7 @@ void Idle(float dt) {
 	UpdateCamera();
 	gCamera->clear(&Background, rw::Camera::CLEARIMAGE | rw::Camera::CLEARZ);
 	gCamera->beginUpdate();
+	DrawSky();
 	rw::SetRenderState(rw::FOGENABLE, gTc.ok);
 	rw::SetRenderState(rw::FOGCOLOR, (uint32_t)(Background.red | Background.green << 8 | Background.blue << 16 | 0xFF000000u));
 	rw::SetRenderState(rw::ALPHATESTFUNC, rw::ALPHAGREATEREQUAL);
