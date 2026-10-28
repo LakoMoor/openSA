@@ -21,6 +21,7 @@
 #include "ColBounds.h"
 #include "Timecyc.h"
 #include "IfpAnim.h"
+#include "WaterDat.h"
 #include "Streamer.h"
 #include "StreamingWorld.h"
 
@@ -1059,6 +1060,52 @@ void DrawSky() {
 	rw::SetRenderState(rw::CULLMODE, rw::CULLBACK);
 }
 
+// Water polygons from data/water.dat, drawn as one flat translucent colour at their stored height.
+// DEVIATION: the original (CWaterLevel::RenderWater) animates waves, flow and foam with the water textures and timecyc water colour;
+// none of that is implemented, and the polygon colour here is a guess.
+std::vector<sa::WaterPoly> gWater;
+bool gWaterTried = false;
+
+void DrawWater() {
+	if (!gWaterTried) {
+		gWaterTried = true;
+		bool ok = sa::LoadWaterDat(gameDir + "/data/water.dat", gWater);
+		fprintf(gLog, "water.dat: %zu polygons (%s)\n", gWater.size(), ok ? "ok" : "failed");
+	}
+	std::vector<rw::RWDEVICE::Im3DVertex> verts;
+	std::vector<rw::uint16> idx;
+	for (const sa::WaterPoly &w : gWater) {
+		float cx = 0, cy = 0;
+		for (int i = 0; i < w.n; i++) { cx += w.x[i]; cy += w.y[i]; }
+		cx /= w.n; cy /= w.n;
+		float dx = cx - camPos.x, dy = cy - camPos.y;
+		if (dx * dx + dy * dy > (gFarClip + 3000.0f) * (gFarClip + 3000.0f)) continue; // polygons are large; keep generous
+		if (verts.size() + 4 > 65000) break;
+		rw::uint16 base = (rw::uint16)verts.size();
+		for (int i = 0; i < w.n; i++) {
+			rw::RWDEVICE::Im3DVertex v;
+			v.setX(w.x[i]); v.setY(w.y[i]); v.setZ(w.z[i]);
+			v.setColor(40, 80, 100, 170);
+			v.setU(0); v.setV(0);
+			verts.push_back(v);
+		}
+		idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
+		if (w.n == 4) { idx.push_back(base + 1); idx.push_back(base + 3); idx.push_back(base + 2); }
+	}
+	if (verts.empty()) return;
+	rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
+	rw::SetRenderState(rw::VERTEXALPHA, 1);
+	rw::SetRenderState(rw::SRCBLEND, rw::BLENDSRCALPHA);
+	rw::SetRenderState(rw::DESTBLEND, rw::BLENDINVSRCALPHA);
+	rw::SetRenderState(rw::ZWRITEENABLE, 0);
+	rw::SetRenderState(rw::CULLMODE, rw::CULLNONE);
+	rw::im3d::Transform(verts.data(), (rw::int32)verts.size(), nil, rw::im3d::EVERYTHING);
+	rw::im3d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, idx.data(), (rw::int32)idx.size());
+	rw::im3d::End();
+	rw::SetRenderState(rw::ZWRITEENABLE, 1);
+	rw::SetRenderState(rw::CULLMODE, rw::CULLBACK);
+}
+
 void Idle(float dt) {
 	static auto start = std::chrono::steady_clock::now();
 	double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
@@ -1114,6 +1161,7 @@ void Idle(float dt) {
 	rw::SetRenderState(rw::ALPHATESTFUNC, rw::ALPHAGREATEREQUAL);
 	rw::SetRenderState(rw::ALPHATESTREF, 100);
 	gWorld->render();
+	DrawWater();
 	gCamera->endUpdate();
 	gCamera->showRaster(0);
 }

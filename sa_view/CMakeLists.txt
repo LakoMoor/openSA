@@ -22,7 +22,7 @@ target_link_libraries(sa_world PRIVATE librw::skeleton librw::librw)
 
 add_executable(sa_stream WIN32 app.rc main_stream.cpp
     ../sa_port/src/ImgV2.cpp ../sa_port/src/TextData.cpp ../sa_port/src/BinaryIpl.cpp
-    ../sa_port/src/StreamingWorld.cpp ../sa_port/src/Streamer.cpp ../sa_port/src/ColBounds.cpp ../sa_port/src/Timecyc.cpp ../sa_port/src/IfpAnim.cpp
+    ../sa_port/src/StreamingWorld.cpp ../sa_port/src/Streamer.cpp ../sa_port/src/ColBounds.cpp ../sa_port/src/Timecyc.cpp ../sa_port/src/IfpAnim.cpp ../sa_port/src/WaterDat.cpp
     ${SA_LIBRW_DIR}/skeleton/camera.cpp)
 target_include_directories(sa_stream PRIVATE ../sa_port/src)
 target_link_libraries(sa_stream PRIVATE librw::skeleton librw::librw)
