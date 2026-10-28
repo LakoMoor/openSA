@@ -1099,30 +1099,63 @@ void DrawSky() {
 	float W = (float)r->width, H = (float)r->height;
 	float tanHalf = gCamera->viewWindow.y;
 	float pitch = camPitch * 3.14159265f / 180.0f;
-	float horizon = H * 0.5f + std::tan(pitch) / tanHalf * H * 0.5f;
-	horizon = std::max(0.0f, std::min(H, horizon));
-	if (horizon <= 0.0f) return;
-	rw::RWDEVICE::Im2DVertex v[4];
-	float xs[4] = {0, W, 0, W}, ys[4] = {0, 0, horizon, horizon};
-	const float *col[4] = {gTc.skyTop, gTc.skyTop, gTc.skyBottom, gTc.skyBottom};
-	float recipZ = 1.0f / gCamera->nearPlane;
-	for (int i = 0; i < 4; i++) {
-		v[i].setScreenX(xs[i]);
-		v[i].setScreenY(ys[i]);
-		v[i].setScreenZ(rw::im2d::GetNearZ());
-		v[i].setCameraZ(gCamera->nearPlane);
-		v[i].setRecipCameraZ(recipZ);
-		v[i].setColor((uint8_t)col[i][0], (uint8_t)col[i][1], (uint8_t)col[i][2], 255);
-		v[i].setU(0, recipZ);
-		v[i].setV(0, recipZ);
+	// CClouds::RenderSkyPolys (0x714650): a camera-centred wall 30 m away; skyTop above 0.5*30 m, skyTop->skyBottom down to the horizon,
+	// skyBottom to -0.1, then skyBottom -> m_BelowHorizonGrey at -0.3 (heights as fractions of the 30 m distance = tan(elevation)).
+	// m_BelowHorizonGrey = GreyValuesDuringDay (0x8CDED8) blended by the hour, mixed to skyBottom with UnderWaterness (0 here).
+	static const float kGrey[8] = {30, 30, 30, 50, 60, 60, 50, 35};
+	float hour = std::fmod(gGameMinutes / 60.0f, 24.0f), grey = kGrey[7], t = 0;
+	{
+		int a = 7;
+		for (int i = 0; i < 8; i++) if (hour >= sa::Timecyc::kHourOfKey[i]) a = i;
+		int b2 = (a + 1) % 8;
+		float ha = (float)sa::Timecyc::kHourOfKey[a], hb = (float)sa::Timecyc::kHourOfKey[b2];
+		if (hb <= ha) hb += 24.0f;
+		float h = hour < ha ? hour + 24.0f : hour;
+		t = (h - ha) / (hb - ha);
+		grey = kGrey[a] + (kGrey[b2] - kGrey[a]) * t;
 	}
-	rw::uint16 idx[6] = {0, 1, 2, 1, 3, 2};
+	float greyCol[3] = {grey, grey, grey};
+	struct Stop { float h; const float *c; };
+	const Stop stops[] = {{0.5f, gTc.skyTop}, {0.0f, gTc.skyBottom}, {-0.1f, gTc.skyBottom}, {-0.3f, greyCol}};
+	auto screenY = [&](float h) { return H * 0.5f - std::tan(std::atan(h) - pitch) / tanHalf * H * 0.5f; };
+	float recipZ = 1.0f / gCamera->nearPlane;
 	rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
 	rw::SetRenderState(rw::ZTESTENABLE, 0);
 	rw::SetRenderState(rw::ZWRITEENABLE, 0);
 	rw::SetRenderState(rw::CULLMODE, rw::CULLNONE);
 	rw::SetRenderState(rw::FOGENABLE, 0);
-	rw::im2d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, v, 4, idx, 6);
+	rw::SetRenderState(rw::VERTEXALPHA, 0);
+	// strip from y0 (colour c0) to y1 (colour c1), clipped to the screen; colours interpolate linearly in screen space like the original quads
+	auto strip = [&](float y0, const float *c0, float y1, const float *c1) {
+		if (y1 <= 0.0f || y0 >= H || y1 <= y0) return;
+		auto at = [&](float y, float *o) {
+			float f = (y - y0) / (y1 - y0);
+			for (int k = 0; k < 3; k++) o[k] = c0[k] + (c1[k] - c0[k]) * f;
+		};
+		float cy0 = std::max(y0, 0.0f), cy1 = std::min(y1, H), ca[3], cb[3];
+		at(cy0, ca); at(cy1, cb);
+		rw::RWDEVICE::Im2DVertex v[4];
+		float xs[4] = {0, W, 0, W}, ys[4] = {cy0, cy0, cy1, cy1};
+		const float *col[4] = {ca, ca, cb, cb};
+		for (int i = 0; i < 4; i++) {
+			v[i].setScreenX(xs[i]); v[i].setScreenY(ys[i]); v[i].setScreenZ(rw::im2d::GetNearZ());
+			v[i].setCameraZ(gCamera->nearPlane); v[i].setRecipCameraZ(recipZ);
+			v[i].setColor((uint8_t)col[i][0], (uint8_t)col[i][1], (uint8_t)col[i][2], 255);
+			v[i].setU(0, recipZ); v[i].setV(0, recipZ);
+		}
+		rw::uint16 idx[6] = {0, 1, 2, 1, 3, 2};
+		rw::im2d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, v, 4, idx, 6);
+	};
+	float yPrev = -1e9f;
+	const float *cPrev = gTc.skyTop;
+	strip(-1e9f, gTc.skyTop, screenY(stops[0].h), gTc.skyTop); // everything above the wall is skyTop
+	yPrev = screenY(stops[0].h); cPrev = stops[0].c;
+	for (int i = 1; i < 4; i++) {
+		float y = screenY(stops[i].h);
+		strip(yPrev, cPrev, y, stops[i].c);
+		yPrev = y; cPrev = stops[i].c;
+	}
+	strip(yPrev, greyCol, H + 1.0f, greyCol); // DEVIATION: below -0.3 the original shows the grey back wall / clear colour; filled with the grey here
 	DrawSunDisc(W, H, tanHalf);
 	rw::SetRenderState(rw::ZTESTENABLE, 1);
 	rw::SetRenderState(rw::ZWRITEENABLE, 1);
