@@ -13,7 +13,7 @@ Written down from the README status table and the project notes; it is the plan 
 | 4b | Audio: footsteps (surface banks, swimming, ambient peds) | done, run-tested only, not heard |
 | 5 | Audio: vehicle engine / horn / doors | partial (horn + cruise-loop engine of the driven car, run-tested, not heard) |
 | 6 | Audio: weapons, speech, ambience, radio streams | not started |
-| 7 | Water: waves, foam, flow shading, seam, brightness | partial (water.dat polygons drawn in two textured layers with the exe's alpha/UV-scroll/wind logic and timecyc colour; no vertex wave animation, foam, 2x2 m renderer grid or seam handling) |
+| 7 | Water: waves, foam, flow shading, seam, brightness | partial (water.dat polygons drawn in two textured layers with the exe's alpha/UV-scroll/wind logic and timecyc colour; wave height grid near the camera done; no foam, colour multiplier / glare, original block-scan renderer or seam handling) |
 | 8 | Particles (sandstorm, splashes, rain haze) | partial (rain streaks only; no particle system, splashes, sandstorm) |
 | 9 | CJ clothes (`ConstructTextures`, clothes builder) | not started |
 | 10 | More script commands / missions (most commands are stubs) | partial |

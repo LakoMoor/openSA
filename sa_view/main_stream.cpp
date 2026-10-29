@@ -2779,7 +2779,7 @@ void DrawSky() {
 
 // Water polygons from data/water.dat, drawn as one flat translucent colour at their stored height.
 // DEVIATION: the original (CWaterLevel::RenderWater) animates waves, flow and foam with the water textures and timecyc water colour;
-// none of that is implemented, and the polygon colour here is a guess.
+// only the wave height grid is implemented (axis-aligned sea quads, 2 m cells within 64 m of the camera, see DrawWater); flow shading / foam / colour mult are not.
 bool gWaterTried = false;
 
 void DrawWater() {
@@ -2841,7 +2841,79 @@ void DrawWater() {
 		}
 		std::vector<rw::RWDEVICE::Im3DVertex> verts;
 		std::vector<rw::uint16> idx;
+		// CWaterLevel::CalculateWavesOnlyForCoordinate (0x6E6EF0, via gta-reversed): three sine waves per grid vertex, multiplier tables read from the exe (0x8D38C8 / 0x8D38E8).
+		auto waveAt = [&](float fx, float fy, float big, float smlW) {
+			static const float mx[8] = {1.0f, 0.85f, 0.73f, 0.77f, 0.75f, 0.8f, 0.73f, 0.8f}, my[8] = {0.75f, 0.9f, 0.95f, 0.82f, 0.7f, 0.75f, 0.9f, 1.0f};
+			int ix = std::abs((int)fx), iy = std::abs((int)fy);
+			float wm = mx[(ix / 2) % 8] * my[(iy / 2) % 8] * kWaterK, out = 0.0f;
+			auto one = [&](unsigned off, float fqx, float fqy, float amp) {
+				float ph = (float)(tms % off) * (6.2831853f / (float)off) + (float)ix * 6.2831853f * fqx + (float)iy * 6.2831853f * fqy;
+				out += std::sin(ph) * wm * amp;
+			};
+			one(5000, 1.0f / 64.0f, 1.0f / 64.0f, 2.0f * big);
+			one(3500, 1.0f / 26.0f, 1.0f / 52.0f, 1.0f * smlW);
+			one(3000, 0.0f, 1.0f / 20.0f, 0.5f * smlW);
+			return out;
+		};
+		const float kNearR = 64.0f, kFade = 16.0f; // DEVIATION: high-detail radius and wave fade are guesses (the original selects 2 m cells by block scan)
+		auto pushVert = [&](float x, float y, float z, float big, float smlW, bool wave) {
+			if (wave) {
+				float f = std::max(0.0f, std::min(1.0f, (kNearR - std::max(std::fabs(x - camPos.x), std::fabs(y - camPos.y))) / kFade));
+				z += waveAt(x, y, big, smlW) * f;
+			}
+			rw::RWDEVICE::Im3DVertex v;
+			v.setX(x); v.setY(y); v.setZ(z);
+			v.setColor(c8(gTc.water[0]), c8(gTc.water[1]), c8(gTc.water[2]), alpha);
+			v.setU(x / scale + shiftU); v.setV(y / scale + shiftV);
+			verts.push_back(v);
+			return (rw::uint16)(verts.size() - 1);
+		};
 		for (const sa::WaterPoly &w : gWater) {
+			// axis-aligned quads (the sea) get the wave grid near the camera, everything else stays flat
+			if (w.n == 4) {
+				float x0 = std::min(std::min(w.x[0], w.x[1]), std::min(w.x[2], w.x[3])), x1 = std::max(std::max(w.x[0], w.x[1]), std::max(w.x[2], w.x[3]));
+				float y0 = std::min(std::min(w.y[0], w.y[1]), std::min(w.y[2], w.y[3])), y1 = std::max(std::max(w.y[0], w.y[1]), std::max(w.y[2], w.y[3]));
+				float cz[2][2], cb[2][2], cs[2][2]; int seen = 0; bool rect = true;
+				for (int i = 0; i < 4; i++) {
+					bool okx = w.x[i] == x0 || w.x[i] == x1, oky = w.y[i] == y0 || w.y[i] == y1;
+					if (!okx || !oky) { rect = false; break; }
+					int ix = w.x[i] == x1 ? 1 : 0, iy = w.y[i] == y1 ? 1 : 0;
+					seen |= 1 << (ix + 2 * iy); cz[ix][iy] = w.z[i]; cb[ix][iy] = w.bigWaves[i]; cs[ix][iy] = w.smallWaves[i];
+				}
+				if (rect && seen == 15 && x1 > x0 && y1 > y0) {
+					float cxm = (x0 + x1) * 0.5f, cym = (y0 + y1) * 0.5f;
+					float dx = cxm - camPos.x, dy = cym - camPos.y, reach = (gFarClip + 3000.0f);
+					if (dx * dx + dy * dy > reach * reach * 4.0f) continue;
+					auto lerp2 = [&](float x, float y, float (&c)[2][2]) {
+						float u = (x - x0) / (x1 - x0), v = (y - y0) / (y1 - y0);
+						return (c[0][0] * (1 - u) + c[1][0] * u) * (1 - v) + (c[0][1] * (1 - u) + c[1][1] * u) * v;
+					};
+					auto flatRect = [&](float ax, float ay, float bx, float by) {
+						if (bx <= ax || by <= ay || verts.size() + 4 > 65000) return;
+						rw::uint16 b = (rw::uint16)verts.size();
+						pushVert(ax, ay, lerp2(ax, ay, cz), 0, 0, false); pushVert(bx, ay, lerp2(bx, ay, cz), 0, 0, false);
+						pushVert(ax, by, lerp2(ax, by, cz), 0, 0, false); pushVert(bx, by, lerp2(bx, by, cz), 0, 0, false);
+						idx.push_back(b); idx.push_back(b + 1); idx.push_back(b + 2); idx.push_back(b + 1); idx.push_back(b + 3); idx.push_back(b + 2);
+					};
+					float nx0 = std::max(x0, std::floor((camPos.x - kNearR) / 2.0f) * 2.0f), nx1 = std::min(x1, std::ceil((camPos.x + kNearR) / 2.0f) * 2.0f);
+					float ny0 = std::max(y0, std::floor((camPos.y - kNearR) / 2.0f) * 2.0f), ny1 = std::min(y1, std::ceil((camPos.y + kNearR) / 2.0f) * 2.0f);
+					{ static int dbg = 0; if (getenv("SA_WATERDBG") && nx0 < nx1 && ny0 < ny1 && dbg++ < 20) { fprintf(gLog, "water rect %.0f %.0f %.0f %.0f near %.0f %.0f %.0f %.0f", x0, y0, x1, y1, nx0, ny0, nx1, ny1); fputc(10, gLog); fflush(gLog); } }
+					if (nx0 >= nx1 || ny0 >= ny1) { flatRect(x0, y0, x1, y1); continue; }
+					flatRect(x0, y0, nx0, y1); flatRect(nx1, y0, x1, y1); flatRect(nx0, y0, nx1, ny0); flatRect(nx0, ny1, nx1, y1);
+					std::vector<float> xs = {nx0}, ys = {ny0};
+					for (float x = std::floor(nx0 / 2.0f) * 2.0f + 2.0f; x < nx1; x += 2.0f) xs.push_back(x);
+					for (float y = std::floor(ny0 / 2.0f) * 2.0f + 2.0f; y < ny1; y += 2.0f) ys.push_back(y);
+					xs.push_back(nx1); ys.push_back(ny1);
+					if (verts.size() + xs.size() * ys.size() > 65000) { flatRect(nx0, ny0, nx1, ny1); continue; }
+					rw::uint16 base = (rw::uint16)verts.size();
+					for (float y : ys) for (float x : xs) pushVert(x, y, lerp2(x, y, cz), lerp2(x, y, cb), lerp2(x, y, cs), true);
+					for (size_t j = 0; j + 1 < ys.size(); j++) for (size_t i = 0; i + 1 < xs.size(); i++) {
+						rw::uint16 a0 = (rw::uint16)(base + j * xs.size() + i), a1 = a0 + 1, a2 = (rw::uint16)(a0 + xs.size()), a3 = a2 + 1;
+						idx.push_back(a0); idx.push_back(a1); idx.push_back(a2); idx.push_back(a1); idx.push_back(a3); idx.push_back(a2);
+					}
+					continue;
+				}
+			}
 			float cx = 0, cy = 0;
 			for (int i = 0; i < w.n; i++) { cx += w.x[i]; cy += w.y[i]; }
 			cx /= w.n; cy /= w.n;
@@ -2867,9 +2939,24 @@ void DrawWater() {
 		rw::SetRenderState(rw::ZWRITEENABLE, 0);
 		rw::SetRenderState(rw::FOGENABLE, 1); // RenderWater (0x6EF673) sets render state 14 (fog) to 1
 		rw::SetRenderState(rw::CULLMODE, rw::CULLNONE);
-		rw::im3d::Transform(verts.data(), (rw::int32)verts.size(), nil, rw::im3d::EVERYTHING);
-		rw::im3d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, idx.data(), (rw::int32)idx.size());
-		rw::im3d::End();
+		// librw's D3D9 immediate buffers hold 10000 vertices / indices per call: draw in batches of triangles with locally remapped vertices
+		for (size_t t = 0; t < idx.size();) {
+			std::vector<rw::RWDEVICE::Im3DVertex> bv;
+			std::vector<rw::uint16> bi;
+			std::unordered_map<rw::uint16, rw::uint16> remap;
+			while (t < idx.size() && bi.size() + 3 <= 9000 && bv.size() + 3 <= 9000) {
+				for (int k = 0; k < 3; k++) {
+					rw::uint16 g = idx[t + k];
+					auto it = remap.find(g);
+					if (it == remap.end()) { it = remap.emplace(g, (rw::uint16)bv.size()).first; bv.push_back(verts[g]); }
+					bi.push_back(it->second);
+				}
+				t += 3;
+			}
+			rw::im3d::Transform(bv.data(), (rw::int32)bv.size(), nil, rw::im3d::EVERYTHING);
+			rw::im3d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, bi.data(), (rw::int32)bi.size());
+			rw::im3d::End();
+		}
 	}
 	rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
 	rw::SetRenderState(rw::ZWRITEENABLE, 1);
