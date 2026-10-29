@@ -601,7 +601,7 @@ rw::V3d ClosestOnTri(const rw::V3d &p, const float *A, const float *B, const flo
 // Pushes a sphere out of the collision geometry of nearby instances; only the horizontal part of the push is applied and
 // near-horizontal (walkable) surfaces are ignored. Returns true if anything pushed.
 bool gWalk = false, gGrounded = true, gSwimming = false;
-float gSwimVelZ = 0.0f;
+float gSwimVelZ = 0.0f, gSwimStopTicks = 0.0f;
 float SwimSubmergeZ(); // CTaskSimpleSwim::ProcessSwimmingResistance height below the water surface, from the live clip blend amounts
 struct Contact { rw::V3d n; float depth; int piece; };
 bool PushOutSphere(rw::V3d &c, float r, std::vector<Contact> *out = nullptr) {
@@ -759,7 +759,14 @@ void UpdateWalk(float dt) {
 	float wl;
 	// without ground collision below (open sea has none), a ped over water falls under gravity until the same rule above applies
 	bool inWater = WaterLevelAt(camPos.x, camPos.y, wl);
-	gSwimming = inWater && (ground ? (camPos.z < wl - 0.6f || (gSwimming && wl - gz > 1.55f)) : camPos.z < wl - 0.6f);
+	// Exit: CPed::ProcessBuoyancy (0x5E1FA0) resets CTaskSimpleSwim::m_fSwimStopTime to 0 while z + 0.6 < waterLevel and adds the time step each tick the ped
+	// is standing; CTaskSimpleSwim::ProcessPed ends the task once it exceeds 15 ticks (constant read at 0x8D2FC0 in the exe). Out of water it is set to 1000.
+	// ASSUMED (from gta-reversed, not re-read in the exe): the buoyancy-force reset branch is not modelled; 'standing' = feet on the ground (origin <= ground + 1.0).
+	bool standing = ground && camPos.z <= gz + kOriginAboveFeet + 0.02f;
+	if (!inWater) gSwimStopTicks = 1000.0f;
+	else if (camPos.z < wl - 0.6f) gSwimStopTicks = 0.0f;
+	else if (gSwimming && standing) gSwimStopTicks += dt * 50.0f;
+	gSwimming = inWater && (ground ? (camPos.z < wl - 0.6f || (gSwimming && gSwimStopTicks <= 15.0f)) : camPos.z < wl - 0.6f);
 	if (!gSwimming) gSwimVelZ = 0.0f;
 	if (gSwimming) {
 		// CTaskSimpleSwim::ProcessSwimmingResistance tail (read in the exe at 0x68A7CE..0x68A8C3: dz/ts clamped to +-0.1*ts, change per tick +-0.02*ts): the vertical move speed (units per 1/50 s tick)
