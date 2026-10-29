@@ -601,6 +601,7 @@ rw::V3d ClosestOnTri(const rw::V3d &p, const float *A, const float *B, const flo
 // Pushes a sphere out of the collision geometry of nearby instances; only the horizontal part of the push is applied and
 // near-horizontal (walkable) surfaces are ignored. Returns true if anything pushed.
 bool gWalk = false, gGrounded = true, gSwimming = false;
+float SwimSubmergeZ(); // CTaskSimpleSwim::ProcessSwimmingResistance height below the water surface, from the live clip blend amounts
 struct Contact { rw::V3d n; float depth; int piece; };
 bool PushOutSphere(rw::V3d &c, float r, std::vector<Contact> *out = nullptr) {
 	bool pushed = false;
@@ -752,14 +753,14 @@ void UpdateWalk(float dt) {
 	// deeper than 1.6 m over the feet. Leaving: the ped stands again once the tread height (waterLevel - 0.55) is at or below ground + 1.0, so a
 	// swimming ped keeps swimming while depth > 1.55 (hysteresis follows from the equilibrium, not from CTaskSimpleSwim's m_fSwimStopTime,
 	// whose exit threshold is NOT reversed). Height follows CTaskSimpleSwim::ProcessSwimmingResistance (0x68A1D0, constants read in the exe:
-	// 0.55 tread, 0.4 breast, 0.2 crawl, 0.65 surface test, 0.1 per tick clamp). DEVIATION: the 0.4/0.2 blends and the smoothing are not
-	// implemented (no clip blending), so moving also sits at the tread height.
+	// 0.55 tread, 0.4 breast, 0.2 crawl, 0.65 surface test, 0.1 per tick clamp). The 0.4/0.2 height blends follow the live breast/crawl clip
+	// amounts (SwimSubmergeZ). DEVIATION: the original moves the ped's velocity toward the height (clamp 0.1 * timeStep, then 1/50 s) instead of this step.
 	float wl;
 	// without ground collision below (open sea has none), a ped over water falls under gravity until the same rule above applies
 	bool inWater = WaterLevelAt(camPos.x, camPos.y, wl);
 	gSwimming = inWater && (ground ? (camPos.z < wl - 0.6f || (gSwimming && wl - gz > 1.55f)) : camPos.z < wl - 0.6f);
 	if (gSwimming) {
-		float target = wl - 0.55f, dz = target - camPos.z, maxStep = 5.0f * dt;
+		float target = wl - SwimSubmergeZ(), dz = target - camPos.z, maxStep = 5.0f * dt;
 		camPos.z += std::max(-maxStep, std::min(maxStep, dz));
 		gVelZ = 0.0f;
 		gGrounded = false;
@@ -914,10 +915,10 @@ float ClipSpeed(const char *name) {
 
 // Active clips, blended like CAnimManager::BlendAnimation: the selected clip fades in with delta kBlendDelta per second, every other clip
 // fades out by its own amount * kBlendDelta (at least 0.05) and is dropped at 0. UpdateBlend: amount += delta * ts (ts in seconds).
-// Deltas VERIFIED in CPed::SetMoveAnim (exe 0x5E4A00): move state STILL -> idle 4.0, WALK / RUN / SPRINT -> 1.0. Jump (read in the exe): launch 0x67D8FB and glide 0x679D35 blend 8.0, land (0x679200) 1000.0 = instant. ASSUMED 4.0 for swim clips (task not checked).
+// Deltas VERIFIED in CPed::SetMoveAnim (exe 0x5E4A00): move state STILL -> idle 4.0, WALK / RUN / SPRINT -> 1.0. Jump (read in the exe): launch 0x67D8FB and glide 0x679D35 blend 8.0, land (0x679200) 1000.0 = instant. Swim (read in the exe, 0x689A2A..0x68A021): tread 8.0, breast / crawl 2.0.
 struct ActiveClip { const sa::IfpAnim *anim; float time, amount, delta; bool loop; };
 std::vector<ActiveClip> gClips;
-constexpr float kBlendDelta = 4.0f, kMoveBlendDelta = 1.0f, kJumpBlendDelta = 8.0f, kLandBlendDelta = 1000.0f;
+constexpr float kBlendDelta = 4.0f, kMoveBlendDelta = 1.0f, kSwimTreadBlendDelta = 8.0f, kSwimStrokeBlendDelta = 2.0f, kJumpBlendDelta = 8.0f, kLandBlendDelta = 1000.0f;
 
 void SelectPedAnim(const char *name, bool loop = true, float blend = kBlendDelta) {
 	auto it = gAnims.find(name);
@@ -934,6 +935,15 @@ void SelectPedAnim(const char *name, bool loop = true, float blend = kBlendDelta
 	gClips.push_back({a, 0.0f, gClips.empty() ? 1.0f : 0.0f, gClips.empty() ? 0.0f : blend, loop});
 }
 
+float SwimSubmergeZ() {
+	float sum = 0.0f, diff = 1.0f;
+	for (const ActiveClip &c : gClips) {
+		if (c.anim == &gAnims["swim_breast"]) { sum += 0.4f * c.amount; diff -= c.amount; }
+		else if (c.anim == &gAnims["swim_crawl"]) { sum += 0.2f * c.amount; diff -= c.amount; }
+	}
+	return std::max(diff, 0.0f) * 0.55f + sum;
+}
+
 void AnimatePed(float dt) {
 	// clip choice is a simplified stand-in for the ped task system; transitions are blended (see ActiveClip)
 	bool moving = sk::keys['W'] || sk::keys['A'] || sk::keys['S'] || sk::keys['D'];
@@ -943,7 +953,7 @@ void AnimatePed(float dt) {
 	gWasAirborne = air;
 	if (gLandTimer > 0.0f) gLandTimer -= dt;
 	if (gLaunchTimer > 0.0f) gLaunchTimer -= dt;
-	if (gWalk && gSwimming) SelectPedAnim(!moving ? "swim_tread" : sk::keys[' '] ? "swim_crawl" : "swim_breast"); // Space = sprint -> crawl
+	if (gWalk && gSwimming) SelectPedAnim(!moving ? "swim_tread" : sk::keys[' '] ? "swim_crawl" : "swim_breast", true, !moving ? kSwimTreadBlendDelta : kSwimStrokeBlendDelta); // Space = sprint -> crawl
 	else if (air) SelectPedAnim(gLaunchTimer > 0.0f ? "jump_launch" : "jump_glide", gLaunchTimer <= 0.0f, kJumpBlendDelta);
 	else if (gLandTimer > 0.0f) SelectPedAnim("jump_land", false, kLandBlendDelta);
 	else SelectPedAnim(PedClip(moving), true, moving ? kMoveBlendDelta : kBlendDelta);
