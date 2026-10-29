@@ -29,6 +29,7 @@ namespace rw { namespace d3d { extern IDirect3DDevice9 *d3ddevice; } }
 #include "StreamingWorld.h"
 #include "ScriptVM.h"
 #include "PopCycle.h"
+#include "Handling.h"
 
 rw::EngineOpenParams engineOpenParams;
 
@@ -62,6 +63,7 @@ sa::TimecycKey gTc;
 std::string gameDir;
 float centerX = 2495.0f, centerY = -1690.0f, loadRadius = 1000.0f; // cap on any model's draw distance
 rw::V3d camPos;
+int gDriveGen = -1; // index into gCarGens of the car the player drives, -1 = on foot
 float camYaw = 0.0f, camPitch = -12.0f; // degrees; yaw 0 looks along +Y
 FILE *gLog;
 
@@ -1161,7 +1163,7 @@ void EnsurePed() {
 
 void UpdatePed() {
 	const bool show = getenv("SA_PEDSHOW") != nullptr; // test aid: draw the ped 6 m ahead of the free camera
-	if (!gWalk && !show) { DestroyPed(); return; }
+	if ((!gWalk && !show) || gDriveGen >= 0) { DestroyPed(); return; }
 	EnsurePed();
 	rw::V3d zaxis = {0, 0, 1};
 	rw::V3d origin = {camPos.x, camPos.y, camPos.z}; // camPos is the ped origin (1.0 above the feet, verified)
@@ -1180,7 +1182,7 @@ void UpdateCamera() {
 	rw::Frame *f = gCamera->getFrame();
 	f->matrix.lookAt(dir, up);
 	f->matrix.pos = camPos;
-	if (gWalk && !gPedParts.empty()) { // third-person: back off along the view direction, stopping short of geometry in between
+	if ((gWalk && !gPedParts.empty()) || gDriveGen >= 0) { // third-person: back off along the view direction, stopping short of geometry in between
 		rw::V3d back = {-dir.x, -dir.y, -dir.z};
 		rw::V3d pivot = {camPos.x, camPos.y, camPos.z + kPedFollowUp};
 		static auto lastZ = std::chrono::steady_clock::now();
@@ -1188,7 +1190,7 @@ void UpdateCamera() {
 		float zdt = std::min(std::chrono::duration<float>(nowZ - lastZ).count(), 0.1f);
 		lastZ = nowZ;
 		gPedZoomSmoothed = std::min(gPedZoomSmoothed + 0.12f * zdt * 50.0f, kPedZoomTarget);
-		float want = std::min(2.0f + gPedZoomSmoothed, kPedFollowDist);
+		float want = std::min(2.0f + gPedZoomSmoothed, kPedFollowDist) + (gDriveGen >= 0 ? 3.0f : 0.0f); // DEVIATION: extra 3 m behind a car is a guess
 		float dist = want, hit = RayCastWorld(pivot, back, want + 0.3f);
 		if (hit >= 0.0f) dist = std::max(0.3f, hit - 0.3f);
 		static int logged = 0;
@@ -1471,6 +1473,66 @@ const Zone *ZoneAt(float x, float y, float z) {
 
 const char *ZoneNameAt(float x, float y, float z) { const Zone *q = ZoneAt(x, y, z); return q ? q->name.c_str() : "-"; }
 
+HandlingCfg gHandling;
+float gCarHeading = 0.0f, gCarSpeed = 0.0f; // radians (counter-clockwise, like the generator angle), m/s along the car's forward axis
+const HandlingData *gDriveHandling = nullptr;
+
+// Driving PROTOTYPE, not CAutomobile::ProcessControl: kinematic bicycle model driven by handling.cfg (maxVelocity, engineAccel, brakeDecel, steeringLock).
+// DEVIATIONS: no suspension / tyre / engine-gear simulation, no collision with the world or other cars, no damage, no doors / enter animation; acceleration scale
+// (engineAccel * 0.14 m/s^2) and the 2.8 m wheelbase are fitted guesses, not read from the exe.
+void StartDriving(int gen) {
+	CarGen &g = gCarGens[gen];
+	gDriveGen = gen;
+	gCarHeading = g.angle;
+	gCarSpeed = 0.0f;
+	gDriveHandling = nullptr;
+	if (const sa::VehicleDef *vd = gW.ide.FindVehicle(g.model)) {
+		std::string h = vd->handling;
+		for (char &c : h) c = (char)toupper((unsigned char)c);
+		auto it = gHandling.cars.find(h);
+		if (it != gHandling.cars.end()) gDriveHandling = &it->second;
+		fprintf(gLog, "driving %s (handling %s %s)%s", vd->model.c_str(), h.c_str(), it != gHandling.cars.end() ? "found" : "MISSING", "\n");
+	}
+}
+
+void DriveUpdate(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
+	CarGen &g = gCarGens[gDriveGen];
+	VehProto *vp = GetVehicleProto(g.model, g.c1, g.c2);
+	const HandlingData *h = gDriveHandling;
+	float vmax = (h ? h->maxVelocity : 120.0f) / 3.6f, acc = (h ? h->engineAccel : 15.0f) * 0.14f, brake = h ? h->brakeDecel : 6.0f;
+	float lock = (h ? h->steeringLock : 30.0f) * 0.0174533f;
+	float v = gCarSpeed;
+	if (kW) v += (v < 0.0f ? brake : acc * std::max(0.0f, 1.0f - v / vmax)) * dt;
+	else if (kS) v -= (v > 0.0f ? brake : acc * 0.6f * std::max(0.0f, 1.0f - (-v) / (vmax * 0.3f))) * dt;
+	else v -= std::copysign(std::min(std::fabs(v), 0.6f * dt), v);   // rolling resistance
+	if (kSpace) v -= std::copysign(std::min(std::fabs(v), brake * 1.5f * dt), v);
+	gCarSpeed = v;
+	float steer = ((kA ? 1.0f : 0.0f) - (kD ? 1.0f : 0.0f)) * lock / (1.0f + std::fabs(v) * 0.06f);
+	gCarHeading += v / 2.8f * std::tan(steer) * dt;
+	g.pos.x += -std::sin(gCarHeading) * v * dt;
+	g.pos.y += std::cos(gCarHeading) * v * dt;
+	g.angle = gCarHeading;
+	float gz;
+	auto *ownCol = gInsts[g.inst].col; gInsts[g.inst].col = nil; // the car's own collision proxy must not count as ground
+	if (GroundHeight(g.pos.x, g.pos.y, g.pos.z + 3.0f, 10.0f, gz)) g.pos.z = gz - (vp ? vp->minZ : 0.0f);
+	gInsts[g.inst].col = ownCol;
+	if (g.clump) {
+		rw::V3d zax = {0, 0, 1};
+		rw::Frame *f = g.clump->getFrame();
+		f->rotate(&zax, gCarHeading * 57.29578f, rw::COMBINEREPLACE);
+		rw::V3d p = g.pos;
+		f->translate(&p, rw::COMBINEPOSTCONCAT);
+		Inst &pi = gInsts[g.inst];
+		float hh = gCarHeading * 0.5f;
+		pi.pos = p;
+		pi.rot = {0, 0, std::sin(hh), std::cos(hh)};
+	}
+	camPos = {g.pos.x, g.pos.y, g.pos.z + 1.0f};
+	float wantYaw = -gCarHeading * 57.29578f;
+	float d = std::fmod(wantYaw - camYaw + 540.0f, 360.0f) - 180.0f;
+	camYaw += d * std::min(1.0f, 4.0f * dt);
+}
+
 ScriptVM gVM;
 PopCycle gPop;
 uint32_t gPickRng = 0x1234567;
@@ -1509,7 +1571,7 @@ int PickRandomGeneratorModel(float hour, bool weekend) {
 int gFramesSinceStart = 0; // stands in for CTheCarGenerators::GenerateEvenIfPlayerIsCloseCounter, which the original raises while loading the scene (ASSUMED, not re-read in the exe)
 
 void UpdateCars() {
-	gFramesSinceStart++;
+	if (gPending.empty() && gStreamer->PendingCount() == 0) gFramesSinceStart++; // scene loaded
 	// CCarGenerator::DoInternalProcessing: unless the generator ignores the population limit, no new parked car while NumParkedCars >= 5 (10 between 21:00 and 07:00).
 	// DEVIATION: NumParkedCars here counts only the cars shown by this viewer (the original also counts random-model ones and applies delays / probability).
 	static float prevCamX = camPos.x, prevCamY = camPos.y;
@@ -1529,11 +1591,12 @@ void UpdateCars() {
 			for (int i = 0, stable = 0; i < 200 && stable < 5; i++) { size_t before = gVM.zonePopType.size(); gVM.tick(20); stable = (before == gVM.zonePopType.size() && before > 0) ? stable + 1 : 0; }
 			fprintf(gLog, "script: %zu threads, %llu commands, %zu zone population types\n", gVM.threadCount(), (unsigned long long)gVM.commandsRun, gVM.zonePopType.size());
 		}
+		if (!gHandling.load(gameDir + "/data/handling.cfg")) fprintf(gLog, "handling.cfg failed to load\n");
 		if (!gPop.load(gameDir + "/data/popcycle.dat", gameDir + "/data/cargrp.dat")) fprintf(gLog, "popcycle.dat / cargrp.dat failed to load\n");
 	}
 	for (CarGen &g : gCarGens) {
 		float dx = g.pos.x - camPos.x, dy = g.pos.y - camPos.y, d2 = dx * dx + dy * dy;
-		if (g.clump && d2 > (kCarSpawnRange + 50.0f) * (kCarSpawnRange + 50.0f)) { gWorld->removeClump(g.clump); g.clump->destroy(); g.clump = nil; g.tried = false; gInsts[g.inst].col = nil; continue; }
+		if (g.clump && (int)(&g - &gCarGens[0]) != gDriveGen && d2 > (kCarSpawnRange + 50.0f) * (kCarSpawnRange + 50.0f)) { gWorld->removeClump(g.clump); g.clump->destroy(); g.clump = nil; g.tried = false; gInsts[g.inst].col = nil; continue; }
 		if (g.clump || g.tried) continue;
 		// CCarGenerator::CheckIfWithinRangeOfAnyPlayers (gta-reversed, exe 0x6F2F40): |dz| <= 50, within 160 m (camera generation multiplier 1), and unless the
 		// generator is high priority (IPL flag bit 0) only in the outer ring (>= 140 m) while the player is not moving away from it, i.e. cars appear at the edge of view.
@@ -2125,12 +2188,34 @@ void Idle(float dt) {
 		if (sk::keys['D']) { camPos.x += right.x * speed; camPos.y += right.y * speed; }
 		if (sk::keys['A']) { camPos.x -= right.x * speed; camPos.y -= right.y * speed; }
 	}
+	// F: get into the nearest parked car within 5 m / out again
+	static bool fDown = false;
+	if (getenv("SA_AUTODRIVE") && now > 10.0) { sk::keys['F'] = now < 10.2; if (now > 11.0) sk::keys['W'] = true; if (now > 16.0) sk::keys['A'] = true; } // test aid
+	if (sk::keys['F'] && !fDown && gWalk) {
+		if (gDriveGen >= 0) {
+			CarGen &g = gCarGens[gDriveGen];
+			camPos = {g.pos.x + std::cos(g.angle) * 2.5f, g.pos.y + std::sin(g.angle) * 2.5f, g.pos.z + 1.5f};
+			gDriveGen = -1; gGrounded = false; gVelZ = 0.0f;
+		} else {
+			int best = -1; float bd = getenv("SA_AUTODRIVE") ? 25600.0f : 25.0f;
+			for (size_t i = 0; i < gCarGens.size(); i++) {
+				if (!gCarGens[i].clump) continue;
+				float dx = gCarGens[i].pos.x - camPos.x, dy = gCarGens[i].pos.y - camPos.y, d2 = dx * dx + dy * dy;
+				if (d2 < bd) { bd = d2; best = (int)i; }
+			}
+			fprintf(gLog, "F pressed: nearest car gen %d d2 %.0f\n", best, bd);
+			if (best >= 0) StartDriving(best);
+		}
+	}
+	fDown = sk::keys['F'];
 	static bool gDown = false;
 	if (sk::keys['G'] && !gDown) { gWalk = !gWalk; gVelZ = 0.0f; }
 	gDown = sk::keys['G'];
 	if (!gWalk) {
 		if (sk::keys['E']) camPos.z += speed;
 		if (sk::keys['Q']) camPos.z -= speed;
+	} else if (gDriveGen >= 0) {
+		DriveUpdate(dt, sk::keys['W'], sk::keys['S'], sk::keys['A'], sk::keys['D'], sk::keys[' ']);
 	} else {
 		CollideWalker();
 		UpdateWalk(dt);
