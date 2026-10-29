@@ -1118,7 +1118,19 @@ void DrawSunDisc(float W, float H, float tanHalf) {
 	// farClip*0.95 along the vector to the sun. DEVIATION: the sizes are taken as half-widths and drawn with the coronastar sprite (the original also fades
 	// by line of sight in CCoronas::Render and draws the SUN flare sprites), alpha values are guesses.
 	float dist = std::max(gFarClip, 1.0f) * 0.95f, pxPerUnit = H * 0.5f / (tanHalf * dist);
-	quad(gTc.sunSize * 6.0f * pxPerUnit, gTc.sunCorona, 90);
+	// CRegisteredCorona::Update (0x6FADF0 path): corona 2 (LOS check on) fades down by timeStep*15 per tick while the line camera->sun is blocked (or the
+	// sun is off screen), up otherwise. DEVIATION: the LOS test uses RayCastWorld, which only reaches the 3x3 cells around the camera (not the full 760 m
+	// to the corona); SunBlockedByClouds is not modelled; fade runs on wall-clock dt.
+	static float sunFade = 0.0f;
+	static auto lastT = std::chrono::steady_clock::now();
+	auto nowT = std::chrono::steady_clock::now();
+	float fdt = std::min(std::chrono::duration<float>(nowT - lastT).count(), 0.1f);
+	lastT = nowT;
+	bool blocked = RayCastWorld(camPos, gToSun, 400.0f) < 400.0f;
+	bool offscreen = sx < 0 || sx > W || sy < 0 || sy > H;
+	float step = fdt * 50.0f * 15.0f;
+	if (blocked || offscreen) sunFade = std::max(0.0f, sunFade - step); else sunFade = std::min(90.0f, sunFade + step);
+	if (sunFade > 0.5f) quad(gTc.sunSize * 6.0f * pxPerUnit, gTc.sunCorona, (uint8_t)sunFade);
 	quad(gTc.sunSize * 2.7335f * pxPerUnit, gTc.sunCore, 255);
 	rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
 }
