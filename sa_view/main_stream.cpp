@@ -1192,7 +1192,8 @@ void UpdatePed() {
 // clip loop instead of from the animation's events; flat volume, no 3D positioning, no other sounds (ambient peds, vehicles, radio, weapons, ambience).
 // A pool of 8 waveOut devices plays one sound each (the original mixes through its own software mixer).
 SfxBanks gSfx;
-SfxBank gFeetBank, gSurfBank[7];
+SfxBank gFeetBank, gSurfBank[7], gSwimBank;
+bool gSwimLoaded = false;
 bool gSurfLoaded[7] = {};
 std::vector<std::string> gSurfAud; // surfaud.dat rows, index = surface id (line order of the data rows)
 bool gSfxReady = false;
@@ -1251,7 +1252,20 @@ void UpdateFootsteps(float dt) {
 		if (gSfx.load(gameDir + "/audio") && gSfx.loadBank(0, gFeetBank)) fprintf(gLog, "audio: %zu banks, feet bank has %zu sounds\n", gSfx.bankCount(), gFeetBank.sounds.size());
 		else { fprintf(gLog, "audio: failed to load banks\n"); gFeetBank.sounds.clear(); }
 	}
+	bool swimStroke = gWalk && gSwimming && gDriveGen < 0 && (sk::keys['W'] || sk::keys['A'] || sk::keys['S'] || sk::keys['D']) && !getenv("SA_MUTE");
 	bool moving = gWalk && gGrounded && !gSwimming && gDriveGen < 0 && (sk::keys['W'] || sk::keys['A'] || sk::keys['S'] || sk::keys['D']) && !getenv("SA_MUTE");
+	if (swimStroke) { // water: GENRL_SWIMMING bank (128), sounds 0..4 (HandleFootstepEvent). DEVIATION: timed by the stroke clip loop, not by animation events
+		if (!gSwimLoaded) { gSwimLoaded = true; bool ok = gSfx.loadBank(128, gSwimBank); fprintf(gLog, "swim bank: %s, %zu sounds\n", ok ? "loaded" : "FAILED", gSwimBank.sounds.size()); }
+		auto sit = gAnims.find(sk::keys[' '] ? "swim_crawl" : "swim_breast");
+		timer -= dt;
+		if (timer <= 0.0f && gSwimBank.sounds.size() >= 5) {
+			timer = sit != gAnims.end() && sit->second.duration > 0 ? sit->second.duration * 0.5f : 0.5f;
+			static uint32_t srng = 0x13579bd;
+			srng = srng * 1664525u + 1013904223u;
+			PlaySfx(gSwimBank.sounds[(srng >> 8) % 5], 0.8f);
+		}
+		return;
+	}
 	if (!moving || gFeetBank.sounds.size() < 6) { timer = 0.0f; return; }
 	auto it = gAnims.find(PedClip(true));
 	float interval = it != gAnims.end() && it->second.duration > 0 ? it->second.duration * 0.5f : 0.4f;
