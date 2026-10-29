@@ -846,7 +846,7 @@ std::vector<PedPart> gPedParts;
 constexpr float kPedFollowDist = 4.0f, kPedFollowUp = 0.6f; // up = table f0 at 0x8CC548 (exe-verified look-at height above the ped origin); kPedFollowDist = table f4 cap
 // Zoom (0x528F8B..0x529130, read in the exe): the target is CCam +0x258 for m_nPedZoom 2 (default; +0x250 for 1, +0x254 otherwise), initialised at 0x5BC5BB to
 // -0.55 / 1.5 / 3.6; m_fPedZoomSmoothed (0xB6F0FC) starts at 0 and moves toward it by 0.12 * timeStep per tick. Distance = min(2.0 (table f1) + zoomSmoothed, f4 = 4.0).
-// ASSUMED: m_nPedZoom = 2 at start (gta-reversed CCamera init; its runtime-set value in the exe was not read), no zoom change keys.
+// m_nPedZoom = 2 at start: CCamera::Init sets eax = 2 at 0x5BC6C2 and stores it to +0xC8 at 0x5BC6FD (read in the exe). DEVIATION: no zoom change keys.
 constexpr float kPedZoomTarget = 3.6f;
 float gPedZoomSmoothed = 0.0f;
 
