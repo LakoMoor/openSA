@@ -1183,6 +1183,49 @@ void DrawLowClouds(float W, float H, float tanHalf) {
 	rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
 }
 
+// Moon: CClouds::Render_MaybeRenderMoon (0x7139B2). Visible while |minutesToday - 220| < 220 (exe-read: 00:00..07:20), brightness colorB = 220 - that,
+// scaled by (1 - max(foggyness, cloudCoverage)); sprite "coronamoon" at camera + (0,-100,15) (world offset, not camera-relative), half-size
+// (MoonSize*2+4) * CalcScreenCoors size with MoonSize = 3 (0x8D4B60), colour (b, b, 0.85*b). DEVIATION: the black pre-pass and "lunar" mask that carve the
+// crescent phase (destination-alpha blend) are not drawn, so the moon is a full disc; additive blend instead of DESTALPHA/ONE.
+void DrawMoon(float W, float H, float tanHalf) {
+	float mins = std::fmod(gGameMinutes, 1440.0f), vis = std::fabs(mins - 220.0f);
+	if ((int)vis >= 220) return;
+	auto foggy = [](int w) { return w == 9 || w == 19; };
+	auto sunny = [](int w) { return w == 1 || w == 3 || w == 5 || w == 10 || w == 14 || w == 18; };
+	auto extra = [](int w) { return w == 0 || w == 2 || w == 6 || w == 11 || w == 13 || w == 17; };
+	float f = gWeatherForced ? 1.0f : std::fmod(gGameMinutes, 60.0f) / 60.0f;
+	auto blend = [&](auto pred) { float a = pred(gOldWeather) ? 1.0f : 0.0f, b = pred(gWeather) ? 1.0f : 0.0f; return a == b ? b : a + (b - a) * f; };
+	float balance = std::max(blend(foggy), blend([&](int w) { return !sunny(w) && !extra(w); }));
+	float colorB = 220.0f - (float)(int)vis, rg = colorB * (1.0f - balance);
+	if ((int)rg <= 0) return;
+	static rw::Texture *tex = ParticleTex("coronamoon");
+	if (!tex) return;
+	rw::Matrix *mt = &gCamera->getFrame()->matrix;
+	float dx = 0.0f, dy = -100.0f, dz = 15.0f;
+	float cx = dx * mt->right.x + dy * mt->right.y + dz * mt->right.z, cy = dx * mt->up.x + dy * mt->up.y + dz * mt->up.z,
+	      cz = dx * mt->at.x + dy * mt->at.y + dz * mt->at.z;
+	if (cz <= gCamera->nearPlane + 1.0f) return;
+	float aspect = W / H, fovDeg = 2.0f * std::atan(tanHalf * aspect) * 180.0f / 3.14159265f;
+	float sx = W * 0.5f + cx / cz / (tanHalf * aspect) * W * 0.5f, sy = H * 0.5f - cy / cz / tanHalf * H * 0.5f;
+	float half = (3.0f * 2.0f + 4.0f) * 640.0f / cz * 70.0f / fovDeg * (W / 640.0f);
+	rw::SetRenderStatePtr(rw::TEXTURERASTER, tex->raster);
+	rw::SetRenderState(rw::VERTEXALPHA, 1);
+	rw::SetRenderState(rw::SRCBLEND, rw::BLENDONE);
+	rw::SetRenderState(rw::DESTBLEND, rw::BLENDONE);
+	rw::RWDEVICE::Im2DVertex v[4];
+	float xs[4] = {sx - half, sx + half, sx - half, sx + half}, ys[4] = {sy - half, sy - half, sy + half, sy + half}, us[4] = {0, 1, 0, 1}, vs[4] = {0, 0, 1, 1};
+	float recipZ = 1.0f / gCamera->nearPlane;
+	for (int i = 0; i < 4; i++) {
+		v[i].setScreenX(xs[i]); v[i].setScreenY(ys[i]); v[i].setScreenZ(rw::im2d::GetNearZ());
+		v[i].setCameraZ(gCamera->nearPlane); v[i].setRecipCameraZ(recipZ);
+		v[i].setColor((uint8_t)rg, (uint8_t)rg, (uint8_t)(colorB * 0.85f * (1.0f - balance)), 255);
+		v[i].setU(us[i], recipZ); v[i].setV(vs[i], recipZ);
+	}
+	rw::uint16 idx[6] = {0, 1, 2, 1, 3, 2};
+	rw::im2d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, v, 4, idx, 6);
+	rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
+}
+
 // Sky gradient: timecyc sky-top colour at the top of the screen blending to sky-bottom at the horizon (the clear colour fills below it).
 // DEVIATION: the original (CClouds::Render) also draws the sun, moon, cloud layers and low-level clouds; none of that is implemented here.
 void DrawSky() {
@@ -1248,6 +1291,7 @@ void DrawSky() {
 		yPrev = y; cPrev = stops[i].c;
 	}
 	strip(yPrev, greyCol, H + 1.0f, greyCol); // DEVIATION: below -0.3 the original shows the grey back wall / clear colour; filled with the grey here
+	DrawMoon(W, H, tanHalf);
 	DrawLowClouds(W, H, tanHalf);
 	DrawSunDisc(W, H, tanHalf);
 	rw::SetRenderState(rw::SRCBLEND, rw::BLENDSRCALPHA);
