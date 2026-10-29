@@ -31,6 +31,7 @@ namespace rw { namespace d3d { extern IDirect3DDevice9 *d3ddevice; } }
 #include "PopCycle.h"
 #include "PathNodes.h"
 #include "AudioBank.h"
+#include "VehiclePhysics.h"
 #include <sstream>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -1692,6 +1693,36 @@ HandlingCfg gHandling;
 // Driving PROTOTYPE, not CAutomobile::ProcessControl: kinematic bicycle model driven by handling.cfg (maxVelocity, engineAccel, brakeDecel, steeringLock).
 // DEVIATIONS: no suspension / tyre / engine-gear simulation, no collision with the world or other cars, no damage, no doors / enter animation; acceleration scale
 // (engineAccel * 0.14 m/s^2) and the 2.8 m wheelbase are fitted guesses, not read from the exe.
+// Rigid-body driving (default; SA_KINEMATIC=1 selects the old kinematic prototype): VehiclePhysics.cpp, a port of CPhysical / CAutomobile suspension / CVehicle::ProcessWheel /
+// cTransmission. Wheel positions come from the model's wheel dummies, wheel size from vehicles.ide. DEVIATIONS: wheel rays are vertical probes against the COL ground
+// (not lines along the suspension axis against all geometry), the ground normal comes from 3 samples, tyre adhesion is 1.0 on every surface (surfinfo.dat adhesion groups not
+// ported), world collision is the old 5-sphere push-out with a speed loss (no CPhysical::ProcessCollision impulses), steering input smoothing 0.1 / tick is assumed,
+// no wheel rotation / steering visuals, no damage.
+vp::CarPhysics gPhys;
+bool gPhysActive = false;
+
+void StartPhysics(CarGen &g) {
+	gPhysActive = false;
+	if (getenv("SA_KINEMATIC") || !gDriveHandling || !g.clump) return;
+	VehProto *proto = GetVehicleProto(g.model, g.c1, g.c2);
+	if (!proto) return;
+	vp::V3 wp[4];
+	const char *names[4] = {"wheel_lf_dummy", "wheel_lb_dummy", "wheel_rf_dummy", "wheel_rb_dummy"};
+	proto->clump->getFrame()->updateObjects();
+	for (int i = 0; i < 4; i++) {
+		rw::Frame *f = FindNamedFrame(proto->clump->getFrame(), names[i]);
+		if (!f) { fprintf(gLog, "physics: no %s, using the kinematic model\n", names[i]); return; }
+		rw::V3d p = f->getLTM()->pos;
+		wp[i] = {p.x, p.y, p.z};
+	}
+	float size = 0.7f;
+	if (const sa::VehicleDef *vd = gW.ide.FindVehicle(g.model)) if (vd->wheelScaleFront > 0.0f) size = vd->wheelScaleFront;
+	gPhys.init(*gDriveHandling, wp, size);
+	gPhys.place({g.pos.x, g.pos.y, g.pos.z + 0.1f}, g.angle);
+	gPhysActive = true;
+	fprintf(gLog, "physics: car %d wheel size %.2f, mass %.0f, front wheel z %.2f\n", g.model, size, gDriveHandling->mass, wp[0].z);
+}
+
 void StartDriving(int gen) {
 	CarGen &g = gCarGens[gen];
 	gDriveGen = gen;
@@ -1705,9 +1736,66 @@ void StartDriving(int gen) {
 		if (it != gHandling.cars.end()) gDriveHandling = &it->second;
 		fprintf(gLog, "driving %s (handling %s %s)%s", vd->model.c_str(), h.c_str(), it != gHandling.cars.end() ? "found" : "MISSING", "\n");
 	}
+	StartPhysics(g);
+}
+
+void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
+	CarGen &g = gCarGens[gDriveGen];
+	auto *ownCol = gInsts[g.inst].col; gInsts[g.inst].col = nil; // the car's own collision proxy must not count as ground / obstacle
+	vp::Input in;
+	float fs = gPhys.forwardSpeed();
+	if (kW) in.gas = 1.0f;
+	if (kS) { if (fs > 0.01f) in.brake = 1.0f; else in.gas = -1.0f; }
+	in.handbrake = kSpace;
+	in.steer = (kA ? 1.0f : 0.0f) - (kD ? 1.0f : 0.0f);
+	auto ground = [&](float x, float y, float zFrom, float zTo, vp::GroundHit &out) {
+		float z, zx, zy;
+		if (!GroundHeight(x, y, zFrom, std::max(0.1f, zFrom - zTo), z)) return false;
+		if (!GroundHeight(x + 0.3f, y, z + 0.5f, 1.0f, zx)) zx = z;
+		if (!GroundHeight(x, y + 0.3f, z + 0.5f, 1.0f, zy)) zy = z;
+		out.z = z;
+		out.normal = vp::norm({-(zx - z) / 0.3f, -(zy - z) / 0.3f, 1.0f});
+		out.adhesion = 1.0f;
+		return true;
+	};
+	gPhys.step(dt * 50.0f, in, ground);
+	// world collision as in the kinematic prototype: five spheres along the car axis pushed out of static geometry
+	{
+		float moved = 0.0f;
+		for (int k = -2; k <= 2; k++) {
+			rw::V3d c = {gPhys.pos.x + gPhys.fwd.x * 0.9f * k, gPhys.pos.y + gPhys.fwd.y * 0.9f * k, gPhys.pos.z + gPhys.up.z * 0.9f + 0.3f};
+			rw::V3d c0 = c;
+			if (PushOutSphere(c, 0.9f)) { gPhys.pos.x += c.x - c0.x; gPhys.pos.y += c.y - c0.y; moved += std::fabs(c.x - c0.x) + std::fabs(c.y - c0.y); }
+		}
+		if (moved > 0.02f) gPhys.moveSpeed *= 0.7f;
+	}
+	gInsts[g.inst].col = ownCol;
+	gCarSpeed = gPhys.forwardSpeed() * 50.0f;
+	{ static float lt = 0; lt += dt; if (lt > 2.0f) { lt = 0; fprintf(gLog, "physics: speed %.1f km/h gear %d wheels %d steer %.2f z %.2f\n", gCarSpeed * 3.6f, (int)gPhys.gear, gPhys.wheelsOnGround, gPhys.steerAngle, gPhys.pos.z); } }
+	gCarHeading = std::atan2(-gPhys.fwd.x, gPhys.fwd.y);
+	g.pos = {gPhys.pos.x, gPhys.pos.y, gPhys.pos.z};
+	g.angle = gCarHeading;
+	if (g.clump) {
+		rw::Frame *f = g.clump->getFrame();
+		f->matrix.right = {gPhys.right.x, gPhys.right.y, gPhys.right.z};
+		f->matrix.up = {gPhys.fwd.x, gPhys.fwd.y, gPhys.fwd.z};
+		f->matrix.at = {gPhys.up.x, gPhys.up.y, gPhys.up.z};
+		f->matrix.pos = g.pos;
+		f->matrix.update();
+		f->updateObjects();
+		Inst &pi = gInsts[g.inst];
+		float hh = gCarHeading * 0.5f;
+		pi.pos = g.pos;
+		pi.rot = {0, 0, std::sin(hh), std::cos(hh)};
+	}
+	camPos = {g.pos.x, g.pos.y, g.pos.z + 1.0f};
+	float wantYaw = -gCarHeading * 57.29578f;
+	float d = std::fmod(wantYaw - camYaw + 540.0f, 360.0f) - 180.0f;
+	camYaw += d * std::min(1.0f, 4.0f * dt);
 }
 
 void DriveUpdate(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
+	if (gPhysActive) { DrivePhysics(dt, kW, kS, kA, kD, kSpace); return; }
 	CarGen &g = gCarGens[gDriveGen];
 	VehProto *vp = GetVehicleProto(g.model, g.c1, g.c2);
 	const HandlingData *h = gDriveHandling;

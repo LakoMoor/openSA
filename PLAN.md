@@ -1,5 +1,7 @@
 # Porting plan
 
+reVC (E:\openSAeVC) is the structural reference for most remaining steps; SA-specific values come from the exe / gta-reversed.
+
 Written down from the README status table and the project notes; it is the plan the work has followed. Status is as of the last commit. "Done" means implemented and checked as far as the README states for that row, with the listed deviations; nothing here is a complete 1:1 port.
 
 | # | Step | Status |
@@ -15,7 +17,7 @@ Written down from the README status table and the project notes; it is the plan 
 | 8 | Particles (sandstorm, splashes, rain haze) | not started |
 | 9 | CJ clothes (`ConstructTextures`, clothes builder) | not started |
 | 10 | More script commands / missions (most commands are stubs) | partial |
-| 11 | Real vehicle physics (CAutomobile) | not started (driving prototype is a fitted kinematic model) |
+| 11 | Real vehicle physics (CAutomobile) | partial (suspension + tyre + transmission core ported from reVC/gta-reversed, flat-ground numbers sane; no collision impulses, no damage, no surface adhesion) |
 | 12 | Car streaming for generator models (`m_AppropriateLoadedCars`) | not started |
 
 Steps 5-12 are each a subsystem of weeks of work in the original; they are not expected to finish in a single session.
