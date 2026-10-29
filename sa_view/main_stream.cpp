@@ -3011,7 +3011,7 @@ WindState WeatherWind(unsigned timeMs) {
 }
 
 // CWeather::RenderRainStreaks (0x72AF70) + the Rain step in CWeather::Update (0x72BBE1): 32 line streaks in a 5 m box 6 m ahead of the camera.
-// DEVIATIONS: FogReduction as 0, no rain particles/splashes/puddles/wet roads, no CullZone no-rain test.
+// DEVIATIONS: FogReduction as 0, splashes are an invented ring stand-in, no real particles/puddles/wet roads, no CullZone no-rain test.
 float gRain = 0.0f;
 int gRainStrength = 0;
 
@@ -3072,6 +3072,40 @@ void DrawRain(float dt, unsigned tms) {
 	rw::im3d::Transform(verts.data(), (rw::int32)verts.size(), nil, rw::im3d::EVERYTHING);
 	rw::im3d::RenderIndexedPrimitive(rw::PRIMTYPELINELIST, idx.data(), (rw::int32)idx.size());
 	rw::im3d::End();
+	// Rain splashes: INVENTED stand-in (the original uses the particle system, which is not ported): short-lived growing rings on the ground within 15 m of the camera.
+	{
+		struct Splash { float x, y, z, age; };
+		static std::vector<Splash> sp;
+		int want = gRainStrength / 3;
+		for (int tries = 0; tries < 6 && (int)sp.size() < want; tries++) {
+			float x = camPos.x + rnd(-15.0f, 15.0f), y = camPos.y + rnd(-15.0f, 15.0f), z;
+			if (GroundHeight(x, y, camPos.z + 3.0f, 12.0f, z)) sp.push_back({x, y, z + 0.03f, 0.0f});
+		}
+		std::vector<rw::RWDEVICE::Im3DVertex> sv;
+		std::vector<rw::uint16> si;
+		for (size_t k = 0; k < sp.size();) {
+			Splash &q = sp[k];
+			q.age += dt;
+			if (q.age > 0.35f) { sp[k] = sp.back(); sp.pop_back(); continue; }
+			float r = 0.04f + q.age * 0.5f;
+			uint8_t al = (uint8_t)(120.0f * (1.0f - q.age / 0.35f));
+			for (int e = 0; e < 8; e++) {
+				float a0 = e * 0.785398f, a1 = (e + 1) * 0.785398f;
+				for (float ang : {a0, a1}) {
+					rw::RWDEVICE::Im3DVertex iv;
+					iv.setX(q.x + std::cos(ang) * r); iv.setY(q.y + std::sin(ang) * r); iv.setZ(q.z);
+					iv.setColor(220, 220, 235, al); iv.setU(0.0f); iv.setV(0.0f);
+					si.push_back((rw::uint16)sv.size()); sv.push_back(iv);
+				}
+			}
+			k++;
+		}
+		if (!sv.empty()) {
+			rw::im3d::Transform(sv.data(), (rw::int32)sv.size(), nil, rw::im3d::EVERYTHING);
+			rw::im3d::RenderIndexedPrimitive(rw::PRIMTYPELINELIST, si.data(), (rw::int32)si.size());
+			rw::im3d::End();
+		}
+	}
 	rw::SetRenderState(rw::ZWRITEENABLE, 1);
 	rw::SetRenderState(rw::VERTEXALPHA, 0);
 }

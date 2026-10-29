@@ -14,7 +14,7 @@ Written down from the README status table and the project notes; it is the plan 
 | 5 | Audio: vehicle engine / horn / doors | partial (horn + cruise-loop engine of the driven car, run-tested, not heard) |
 | 6 | Audio: weapons, speech, ambience, radio streams | not started |
 | 7 | Water: waves, foam, flow shading, seam, brightness | partial (water.dat polygons drawn in two textured layers with the exe's alpha/UV-scroll/wind logic and timecyc colour; wave height grid near the camera done; no foam, colour multiplier / glare, original block-scan renderer or seam handling) |
-| 8 | Particles (sandstorm, splashes, rain haze) | partial (rain streaks only; no particle system, splashes, sandstorm) |
+| 8 | Particles (sandstorm, splashes, rain haze) | partial (rain streaks; ground splash rings as an INVENTED stand-in, not seen in a screenshot; no particle system, sandstorm) |
 | 9 | CJ clothes (`ConstructTextures`, clothes builder) | partial (starting outfit from main.scm's GIVE_PLAYER_CLOTHES_OUTSIDE_SHOP: vest, denim jeans, black sneakers as separate skinned parts; checked on screen; no texture composition/blending, no fat/muscle blend, no outfit changes, outfit hard-coded from the recorded script calls) |
 | 10 | More script commands / missions (most commands are stubs) | partial |
 | 11 | Real vehicle physics (CAutomobile) | partial (suspension + tyre + transmission core ported from reVC/gta-reversed, flat-ground numbers sane; surface adhesion from surface.dat/surfinfo.dat done; static-world collision impulses done; no damage, no vehicle/ped/object collisions) |
