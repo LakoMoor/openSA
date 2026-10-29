@@ -622,7 +622,7 @@ rw::V3d ClosestOnTri(const rw::V3d &p, const float *A, const float *B, const flo
 bool gWalk = false, gGrounded = true, gSwimming = false;
 float gSwimVelZ = 0.0f, gSwimStopTicks = 0.0f;
 float SwimSubmergeZ(); // CTaskSimpleSwim::ProcessSwimmingResistance height below the water surface, from the live clip blend amounts
-struct Contact { rw::V3d n; float depth; int piece; };
+struct Contact { rw::V3d n; float depth; int piece; bool veh = false; }; // veh: contact with a parked car (collision proxy Inst, id < 0)
 bool PushOutSphere(rw::V3d &c, float r, std::vector<Contact> *out = nullptr) {
 	bool pushed = false;
 	for (int cx = CellOf(c.x - 3); cx <= CellOf(c.x + 3); cx++)
@@ -645,7 +645,7 @@ bool PushOutSphere(rw::V3d &c, float r, std::vector<Contact> *out = nullptr) {
 					if (dist2 >= r * r || dist2 < 1e-12f) continue;
 					rw::V3d wd = QuatRotate(in.rot, d, false); // world-space push direction
 					float dist = std::sqrt(dist2), nz = std::fabs(wd.z) / dist;
-					if (out) { out->push_back({{wd.x / dist, wd.y / dist, wd.z / dist}, r - dist, 0}); pushed = true; continue; }
+					if (out) { out->push_back({{wd.x / dist, wd.y / dist, wd.z / dist}, r - dist, 0, in.id < 0}); pushed = true; continue; }
 					if (nz > 0.7f) continue; // floor or ceiling, not a wall
 					float k = (r - dist) / dist;
 					c.x += wd.x * k; c.y += wd.y * k;
@@ -658,7 +658,7 @@ bool PushOutSphere(rw::V3d &c, float r, std::vector<Contact> *out = nullptr) {
 					if (dist2 >= rr * rr || dist2 < 1e-12f) continue;
 					rw::V3d wd = QuatRotate(in.rot, d, false);
 					float dist = std::sqrt(dist2);
-					if (out) { out->push_back({{wd.x / dist, wd.y / dist, wd.z / dist}, rr - dist, 0}); pushed = true; continue; }
+					if (out) { out->push_back({{wd.x / dist, wd.y / dist, wd.z / dist}, rr - dist, 0, in.id < 0}); pushed = true; continue; }
 					if (std::fabs(wd.z) / dist > 0.7f) continue;
 					float k = (rr - dist) / dist;
 					c.x += wd.x * k; c.y += wd.y * k;
@@ -672,7 +672,7 @@ bool PushOutSphere(rw::V3d &c, float r, std::vector<Contact> *out = nullptr) {
 					if (dist2 >= r * r || dist2 < 1e-12f) continue;
 					rw::V3d wd = QuatRotate(in.rot, d, false);
 					float dist = std::sqrt(dist2);
-					if (out) { out->push_back({{wd.x / dist, wd.y / dist, wd.z / dist}, r - dist, 0}); pushed = true; continue; }
+					if (out) { out->push_back({{wd.x / dist, wd.y / dist, wd.z / dist}, r - dist, 0, in.id < 0}); pushed = true; continue; }
 					if (std::fabs(wd.z) / dist > 0.7f) continue;
 					float k = (r - dist) / dist;
 					c.x += wd.x * k; c.y += wd.y * k;
@@ -706,8 +706,17 @@ void CollideWalker() {
 	rw::V3d shift = {0, 0, 0};
 	float maxDepth = 0.0f;
 	int n = 0;
+	// DEVIATION (cars): the original resolves ped-vs-vehicle through CPhysical::ApplyCollision (impulses on both bodies, the car is dynamic); here a parked car
+	// is a solid obstacle: the horizontal part of its contact normals pushes the ped out by the full depth (capped at 0.3 per tick).
+	rw::V3d solid = {0, 0, 0};
+	float solidDepth = 0.0f;
 	for (Contact &ct : contacts) {
 		if (ct.depth <= 0.0f) continue;
+		if (ct.veh) {
+			float hz = std::sqrt(ct.n.x * ct.n.x + ct.n.y * ct.n.y);
+			if (hz > 1e-4f) { solid.x += ct.n.x / hz * ct.depth; solid.y += ct.n.y / hz * ct.depth; solidDepth = std::max(solidDepth, ct.depth); }
+			continue;
+		}
 		rw::V3d v = ct.n;
 		if (gGrounded && v.z < -0.99f && ct.piece == 2) {
 			// CPed::ProcessEntityCollision 0x5E2530, second contact loop: the top sphere (piece 2) against a flat ceiling (normal z < -0.99): push back against the
@@ -727,6 +736,11 @@ void CollideWalker() {
 	}
 	static int dbgN = 0;
 	if (getenv("SA_COLDEBUG") && (dbgN++ % 30 == 0)) fprintf(gLog, "collide: contacts=%zu used=%d at (%.1f,%.1f,%.1f)\n", contacts.size(), n, camPos.x, camPos.y, camPos.z);
+	float sl = std::sqrt(solid.x * solid.x + solid.y * solid.y);
+	if (sl > 1e-6f) {
+		float k = std::min(solidDepth, 0.3f) / sl;
+		camPos.x += solid.x * k; camPos.y += solid.y * k;
+	}
 	if (!n) { prevX = camPos.x; prevY = camPos.y; return; }
 	float mag = std::sqrt(shift.x * shift.x + shift.y * shift.y + shift.z * shift.z);
 	if (mag > 1.0f) { shift.x /= mag; shift.y /= mag; shift.z /= mag; }
@@ -1261,7 +1275,7 @@ const char *FrameName(rw::Frame *f) { return nodeNameOffset >= 0 && f ? PLUGINOF
 // Parked vehicles from the IPL car generators. DEVIATIONS: every generator with a fixed vehicle model within kCarSpawnRange is shown as a static,
 // intact car (the original spawns through CCarGenerator::Process: probability, delays, population and zone rules, alarms, door locks, a random
 // model for modelId -1, vehicle physics); colours are the first carcols.dat pair of the model (generator colour indices are not applied); the stock
-// wheel is wheel_gn1 (IDE wheelId is -1 for every car, the original choice is not verified); the car sits on the COL ground below the generator at the
+// wheel is the car's own main wheel atomic cloned onto the four wheel frames (CVehicleModelInfo::PreprocessHierarchy as in gta-reversed, not re-read in the exe); the car sits on the COL ground below the generator at the
 // lowest wheel / body vertex.
 struct VehProto { rw::Clump *clump = nil; float minZ = 0; sa::ColModel col; bool hasCol = false; };
 std::unordered_map<int, VehProto> gVehProtos;
@@ -1353,43 +1367,32 @@ VehProto *GetVehicleProto(int id) {
 				if (m->color.red == kMarkers[k].red && m->color.green == kMarkers[k].green && m->color.blue == kMarkers[k].blue) { m->color = cols[k]; m->color.alpha = 255; }
 		}
 	}
-	// hide the placeholder wheel, damaged-part variants and the very-low-detail body (intact, close-up state)
+	// hide damaged-part variants and the very-low-detail body (intact, close-up state)
 	FORLIST(lnk, c->atomics) {
 		rw::Atomic *a = rw::Atomic::fromClump(lnk);
 		const char *n = FrameName(a->getFrame());
 		size_t nl = strlen(n);
-		if (!_stricmp(n, "wheel") || (nl > 4 && (!_stricmp(n + nl - 4, "_dam") || !_stricmp(n + nl - 4, "_vlo")))) a->object.object.flags &= ~rw::Atomic::RENDER;
+		if (nl > 4 && (!_stricmp(n + nl - 4, "_dam") || !_stricmp(n + nl - 4, "_vlo"))) a->object.object.flags &= ~rw::Atomic::RENDER;
 	}
-	// wheels
+	// wheels: CVehicleModelInfo::PreprocessHierarchy (gta-reversed, VehicleModelInfo.cpp:587) takes the main wheel atomic under wheel_rf_dummy from the
+	// car's own DFF and clones it onto the other wheel frames (the stock wheel is NOT taken from wheels.dff, that is for upgrades). Dummy frames are used as is.
 	{
-		std::ifstream f(gameDir + "/models/generic/wheels.dff", std::ios::binary);
-		std::vector<uint8_t> wb((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-		rw::StreamMemory ws;
-		ws.open(wb.data(), (rw::uint32)wb.size());
-		rw::Clump *wc = rw::findChunk(&ws, rw::ID_CLUMP, nil, nil) ? rw::Clump::streamRead(&ws) : nil;
-		ws.close();
-		rw::Atomic *proto = nil, *firstWheel = nil;
-		if (wc)
-			FORLIST(lnk, wc->atomics) {
-				rw::Atomic *a = rw::Atomic::fromClump(lnk);
-				const char *n = FrameName(a->getFrame());
-				if (!_stricmp(n, "wheel_gn1")) proto = a;
-				if (!firstWheel && !_strnicmp(n, "wheel_", 6)) firstWheel = a;
+		rw::Atomic *mainWheel = nil;
+		rw::Frame *rf = FindNamedFrame(c->getFrame(), "wheel_rf_dummy");
+		FORLIST(lnk, c->atomics) {
+			rw::Atomic *a = rw::Atomic::fromClump(lnk);
+			if (!_stricmp(FrameName(a->getFrame()), "wheel")) mainWheel = a;
+		}
+		if (mainWheel && rf) {
+			for (const char *dn : {"wheel_lf_dummy", "wheel_lb_dummy", "wheel_rb_dummy"}) {
+				rw::Frame *d = FindNamedFrame(c->getFrame(), dn);
+				if (!d) continue;
+				rw::Atomic *a = mainWheel->clone();
+				rw::Frame *fr = rw::Frame::create();
+				d->addChild(fr);
+				a->setFrame(fr);
+				c->addAtomic(a);
 			}
-		if (!proto) proto = firstWheel;
-		float scale = v->wheelScaleFront > 0 ? v->wheelScaleFront : 0.7f;
-		struct { const char *dummy; bool right; } slots[4] = {{"wheel_lf_dummy", false}, {"wheel_rf_dummy", true}, {"wheel_lb_dummy", false}, {"wheel_rb_dummy", true}};
-		for (auto &sl : slots) {
-			rw::Frame *d = FindNamedFrame(c->getFrame(), sl.dummy);
-			if (!d || !proto) continue;
-			rw::Atomic *a = proto->clone();
-			rw::Frame *fr = rw::Frame::create();
-			rw::V3d sc = {scale, scale, scale}, z = {0, 0, 1};
-			fr->scale(&sc, rw::COMBINEREPLACE);
-			if (sl.right) fr->rotate(&z, 180.0f, rw::COMBINEPOSTCONCAT);
-			d->addChild(fr);
-			a->setFrame(fr);
-			c->addAtomic(a);
 		}
 	}
 	c->getFrame()->updateObjects();
