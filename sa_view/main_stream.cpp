@@ -1422,7 +1422,7 @@ void DrawWater() {
 			for (int i = 0; i < w.n; i++) {
 				rw::RWDEVICE::Im3DVertex v;
 				v.setX(w.x[i]); v.setY(w.y[i]); v.setZ(w.z[i]);
-				v.setColor(c8(gTc.water[0]), c8(gTc.water[1]), c8(gTc.water[2]), alpha);
+				v.setColor(c8(gTc.water[0]), c8(gTc.water[1]), c8(gTc.water[2]), alpha); // tried x0.577 (gta-reversed GetWaterColorForRendering): makes the sea much darker than the original, so not applied
 				v.setU(w.x[i] / scale + shiftU); v.setV(w.y[i] / scale + shiftV);
 				verts.push_back(v);
 			}
