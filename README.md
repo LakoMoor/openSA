@@ -30,7 +30,8 @@ Early stage. This is a data and streaming layer plus viewers, not a playable gam
 | Script VM (main.scm): core commands, mission launch, zone population types; random-model car generators | started: zone pop type from main.scm and popcycle/cargrp pick the model (approximation of PickRandomCar, no car streaming); most game commands unhandled |
 | Driving a parked car (F, WASD, space) | PROTOTYPE: kinematic model from handling.cfg, no suspension/damage/enter animation; world collision = 5 pushed-out spheres; verified on screen |
 | Path nodes (`nodes0..63.dat`): 68237 nodes (30587 vehicle, 37650 ped) parsed, areaId matches file for all | nodes, node links (143622), car path links (31466), link lengths and intersection flags parsed, every link target valid; routing not yet |
-| Vehicle reflections, vehicle physics (real), peds, traffic, audio | not started |
+| Ambient pedestrians in the viewer: spawn on ped path nodes 30-70 m from the camera, ped group from the zone's popcycle row (weekday only), model from `pedgrp.dat` (Los Santos variant only), dff/txd from gta3.img, walk along node links (random next node, not back) at the walk clip's average speed, ground from COL, despawn at 110 m; checked on screen near Grove Street. Deviations: every ped plays `walk_civi` regardless of anim group, no stopping/crossing/avoidance/collision, no cars or traffic reaction, spawn ring/despawn/cap (30) are guesses, `SA_NOPEDS=1` disables | partial |
+| Vehicle reflections, vehicle physics (real), traffic, audio | not started |
 
 The goal is behaviour identical to the original game. Facts read from the executable are marked as such in
 the source comments (function names and addresses refer to the 1.0 US executable); everything else is an

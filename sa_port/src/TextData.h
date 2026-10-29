@@ -73,6 +73,7 @@ public:
 	const VehicleDef *FindVehicle(int id) const;
 	const VehicleDef *FindVehicleByModelName(const std::string &lowerName) const;
 	const PedDef *FindPed(int id) const;
+	const PedDef *FindPedByModelName(const std::string &lowerName) const;
 	// True if any section (objs/tobj/cars/peds/weap/anim/hier) defines this model id.
 	bool HasModel(int id) const { return m_modelIds.count(id) != 0; }
 	// (id, model name) of every model defined by any IDE section.

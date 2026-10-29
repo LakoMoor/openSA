@@ -1,5 +1,6 @@
 #include "TextData.h"
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -165,6 +166,17 @@ bool IdeDb::LoadFile(const std::string &path) {
 const VehicleDef *IdeDb::FindVehicle(int id) const {
 	auto it = m_vehicles.find(id);
 	return it == m_vehicles.end() ? nullptr : &it->second;
+}
+
+const PedDef *IdeDb::FindPedByModelName(const std::string &lowerName) const {
+	for (const auto &kv : m_peds) {
+		const std::string &m = kv.second.model;
+		if (m.size() != lowerName.size()) continue;
+		bool eq = true;
+		for (size_t i = 0; i < m.size() && eq; i++) eq = std::tolower((unsigned char)m[i]) == (unsigned char)lowerName[i];
+		if (eq) return &kv.second;
+	}
+	return nullptr;
 }
 
 const PedDef *IdeDb::FindPed(int id) const {

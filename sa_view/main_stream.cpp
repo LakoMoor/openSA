@@ -29,6 +29,7 @@ namespace rw { namespace d3d { extern IDirect3DDevice9 *d3ddevice; } }
 #include "StreamingWorld.h"
 #include "ScriptVM.h"
 #include "PopCycle.h"
+#include "PathNodes.h"
 #include "Handling.h"
 
 rw::EngineOpenParams engineOpenParams;
@@ -1011,6 +1012,48 @@ float SwimSubmergeZ() {
 	return std::max(diff, 0.0f) * 0.55f + sum;
 }
 
+void PosePart(PedPart &part, const std::vector<ActiveClip> &clips) {
+	if (!part.hier) return;
+	// per bone: weighted nlerp over the active clips that animate it (weights normalised), translation lerped the same way
+	struct Acc { float q[4] = {0, 0, 0, 0}, t[3] = {0, 0, 0}, w = 0, tw = 0; };
+	std::unordered_map<int, Acc> acc;
+	for (const ActiveClip &c : clips) {
+		if (c.amount <= 0.0f) continue;
+		for (const sa::IfpSeq &sq : c.anim->seqs) {
+			if (sq.keys.empty() || part.hier->getIndex(sq.boneTag) < 0) continue;
+			rw::Quat q = SampleQuat(sq.keys, c.time);
+			Acc &a = acc[sq.boneTag];
+			float sgn = (a.w > 0 && a.q[0] * q.x + a.q[1] * q.y + a.q[2] * q.z + a.q[3] * q.w < 0) ? -1.0f : 1.0f;
+			a.q[0] += sgn * q.x * c.amount; a.q[1] += sgn * q.y * c.amount; a.q[2] += sgn * q.z * c.amount; a.q[3] += sgn * q.w * c.amount;
+			a.w += c.amount;
+			if (sq.hasTrans) {
+				const sa::IfpKey &k = sq.keys[0];
+				a.t[0] += k.t[0] * c.amount; a.t[1] += k.t[1] * c.amount; a.t[2] += k.t[2] * c.amount;
+				a.tw += c.amount;
+			}
+		}
+	}
+	for (auto &kv : acc) {
+		Acc &a = kv.second;
+		int ni = part.hier->getIndex(kv.first);
+		rw::Frame *fr = part.hier->nodeInfo[ni].frame;
+		if (!fr) continue;
+		float l = std::sqrt(a.q[0] * a.q[0] + a.q[1] * a.q[1] + a.q[2] * a.q[2] + a.q[3] * a.q[3]);
+		if (l <= 0) continue;
+		rw::Quat q;
+		q.x = a.q[0] / l; q.y = a.q[1] / l; q.z = a.q[2] / l; q.w = a.q[3] / l;
+		rw::Matrix m;
+		rw::Matrix::makeRotation(&m, q);
+		fr->matrix.right = m.right; fr->matrix.up = m.up; fr->matrix.at = m.at;
+		if (a.tw > 0) fr->matrix.pos = {a.t[0] / a.tw, a.t[1] / a.tw, a.t[2] / a.tw};
+		fr->matrix.update();
+	}
+	part.clump->getFrame()->updateObjects();
+	// the hierarchy has no interpolator (updateMatrices would crash), so take the bone matrices straight from the frames' LTMs
+	for (int i = 0; i < part.hier->numNodes; i++)
+		if (part.hier->nodeInfo[i].frame) part.hier->matrices[i] = *part.hier->nodeInfo[i].frame->getLTM();
+}
+
 void AnimatePed(float dt) {
 	// clip choice is a simplified stand-in for the ped task system; transitions are blended (see ActiveClip)
 	bool moving = sk::keys['W'] || sk::keys['A'] || sk::keys['S'] || sk::keys['D'];
@@ -1037,51 +1080,11 @@ void AnimatePed(float dt) {
 	}
 	gAnimTime = 0.0f;
 	for (const ActiveClip &c : gClips) if (c.anim == gPedAnim) gAnimTime = c.time;
-	for (PedPart &part : gPedParts) {
-		if (!part.hier) continue;
-		// per bone: weighted nlerp over the active clips that animate it (weights normalised), translation lerped the same way
-		struct Acc { float q[4] = {0, 0, 0, 0}, t[3] = {0, 0, 0}, w = 0, tw = 0; };
-		std::unordered_map<int, Acc> acc;
-		for (const ActiveClip &c : gClips) {
-			if (c.amount <= 0.0f) continue;
-			for (const sa::IfpSeq &sq : c.anim->seqs) {
-				if (sq.keys.empty() || part.hier->getIndex(sq.boneTag) < 0) continue;
-				rw::Quat q = SampleQuat(sq.keys, c.time);
-				Acc &a = acc[sq.boneTag];
-				float sgn = (a.w > 0 && a.q[0] * q.x + a.q[1] * q.y + a.q[2] * q.z + a.q[3] * q.w < 0) ? -1.0f : 1.0f;
-				a.q[0] += sgn * q.x * c.amount; a.q[1] += sgn * q.y * c.amount; a.q[2] += sgn * q.z * c.amount; a.q[3] += sgn * q.w * c.amount;
-				a.w += c.amount;
-				if (sq.hasTrans) {
-					const sa::IfpKey &k = sq.keys[0];
-					a.t[0] += k.t[0] * c.amount; a.t[1] += k.t[1] * c.amount; a.t[2] += k.t[2] * c.amount;
-					a.tw += c.amount;
-				}
-			}
-		}
-		for (auto &kv : acc) {
-			Acc &a = kv.second;
-			int ni = part.hier->getIndex(kv.first);
-			rw::Frame *fr = part.hier->nodeInfo[ni].frame;
-			if (!fr) continue;
-			float l = std::sqrt(a.q[0] * a.q[0] + a.q[1] * a.q[1] + a.q[2] * a.q[2] + a.q[3] * a.q[3]);
-			if (l <= 0) continue;
-			rw::Quat q;
-			q.x = a.q[0] / l; q.y = a.q[1] / l; q.z = a.q[2] / l; q.w = a.q[3] / l;
-			rw::Matrix m;
-			rw::Matrix::makeRotation(&m, q);
-			fr->matrix.right = m.right; fr->matrix.up = m.up; fr->matrix.at = m.at;
-			if (a.tw > 0) fr->matrix.pos = {a.t[0] / a.tw, a.t[1] / a.tw, a.t[2] / a.tw};
-			fr->matrix.update();
-		}
-		part.clump->getFrame()->updateObjects();
-		// the hierarchy has no interpolator (updateMatrices would crash), so take the bone matrices straight from the frames' LTMs
-		for (int i = 0; i < part.hier->numNodes; i++)
-			if (part.hier->nodeInfo[i].frame) part.hier->matrices[i] = *part.hier->nodeInfo[i].frame->getLTM();
-	}
+	for (PedPart &part : gPedParts) PosePart(part, gClips);
 }
 
 // Streams one clump (dff bytes) with textures taken from the given dictionaries; adds it to the world and binds its skeleton.
-bool AddPedPart(const std::vector<uint8_t> &dff, const std::vector<rw::TexDictionary *> &txds, const char *what, const char *skinTexture = nullptr) {
+bool AddPedPart(const std::vector<uint8_t> &dff, const std::vector<rw::TexDictionary *> &txds, const char *what, const char *skinTexture = nullptr, std::vector<PedPart> &dst = gPedParts) {
 	gChain = txds;
 	rw::TexDictionary::setCurrent(nil);
 	rw::Texture::findCB = FindInChain;
@@ -1108,7 +1111,7 @@ bool AddPedPart(const std::vector<uint8_t> &dff, const std::vector<rw::TexDictio
 		if (part.hier && rw::Skin::get(at->geometry)) rw::Skin::setHierarchy(at, part.hier);
 	}
 	fprintf(gLog, "ped: %s loaded (hierarchy %s, %d nodes)\n", what, part.hier ? "found" : "missing", part.hier ? part.hier->numNodes : 0);
-	gPedParts.push_back(part);
+	dst.push_back(part);
 	return true;
 }
 
@@ -1650,6 +1653,206 @@ void UpdateCars() {
 		pi.col = vp->hasCol ? &vp->col : nil;
 		pi.colRadius = vp->hasCol ? vp->col.bound.radius : 0;
 	}
+}
+
+// ---- Ambient pedestrians ----
+// ORIGINAL: CPopulation::AddPed picks a ped group from the popcycle row (weekday/weekend, 2-hour slot) of the zone, a model from pedgrp.dat, and places it on a
+// ped path node (CPathFind::FindNextNodeWandering for the walk); animation and speed come from the ped's task system and anim group.
+// DEVIATIONS: pedgrp.dat variant is always the Los Santos one (first line of each group; SF / Vegas lines are ignored); weekday only; every ped plays walk_civi
+// (animation group of the model ignored) at the clip's average speed; no head turning / stopping / crossing logic; no collision with cars or other peds;
+// spawn ring (30..70 m) and despawn distance (110 m) are guesses, not read from the exe; the maximum is the popcycle maxPeds capped at 30.
+PathData gPaths;
+bool gPathsLoaded = false;
+std::vector<std::vector<std::string>> gPedGroups; // pedgrp.dat, index = popcycle ped group column
+struct PedNodeRef { NodeAddr a; float x, y, z; };
+std::unordered_map<int64_t, std::vector<PedNodeRef>> gPedNodeGrid; // 50 m cells
+struct AmbientPed {
+	std::vector<PedPart> parts;
+	std::vector<ActiveClip> clips;
+	rw::V3d pos; // feet
+	float heading = 0.0f; // degrees, forward = (sin, cos) like camYaw
+	NodeAddr cur, prev, next;
+	int model = -1;
+};
+std::vector<AmbientPed> gAmbientPeds;
+struct PedAssets { std::vector<uint8_t> dff; std::vector<rw::TexDictionary *> txds; };
+std::unordered_map<int, PedAssets> gPedAssets;
+
+int64_t PedCellKey(int cx, int cy) { return ((int64_t)cx << 32) ^ (uint32_t)cy; }
+
+void LoadPedGroups() {
+	std::ifstream f(gameDir + "/data/pedgrp.dat");
+	std::string line, lastName;
+	while (std::getline(f, line)) {
+		size_t h = line.find('#');
+		std::string name = h == std::string::npos ? "" : line.substr(h + 1);
+		std::string list = line.substr(0, h);
+		if (list.find_first_not_of(" \t\r") == std::string::npos) continue;
+		size_t p = name.find('(');
+		if (p != std::string::npos) name = name.substr(0, p);
+		while (!name.empty() && isspace((unsigned char)name.back())) name.pop_back();
+		if (name == lastName) continue; // SF / VEGAS variant of the previous group
+		lastName = name;
+		std::vector<std::string> models;
+		std::string cur;
+		for (char c : list + ",") {
+			if (c == ',') { if (!cur.empty()) models.push_back(cur); cur.clear(); }
+			else if (!isspace((unsigned char)c)) cur += (char)tolower((unsigned char)c);
+		}
+		gPedGroups.push_back(models);
+	}
+	fprintf(gLog, "pedgrp.dat: %zu groups\n", gPedGroups.size());
+}
+
+void InitPeds() {
+	gPathsLoaded = gPaths.load(gameDir + "/data/Paths");
+	if (!gPathsLoaded) { fprintf(gLog, "path nodes failed to load\n"); return; }
+	LoadPedGroups();
+	size_t n = 0;
+	for (int a = 0; a < 64; a++)
+		for (size_t i = 0; i < gPaths.areas[a].nodes.size(); i++) {
+			const PathNode &nd = gPaths.areas[a].nodes[i];
+			if (nd.vehicle || nd.switchedOff || !nd.numLinks) continue;
+			gPedNodeGrid[PedCellKey((int)std::floor(nd.x / 50.0f), (int)std::floor(nd.y / 50.0f))].push_back({{(uint16_t)a, (uint16_t)i}, nd.x, nd.y, nd.z});
+			n++;
+		}
+	fprintf(gLog, "ambient peds: %zu walkable ped nodes\n", n);
+}
+
+const PathNode &NodeOf(NodeAddr a) { return gPaths.areas[a.area].nodes[a.node]; }
+
+// Next node to walk to from cur: any linked ped node except the one just left (unless it is the only way).
+bool ChooseNextNode(const NodeAddr &cur, const NodeAddr &prev, NodeAddr &out) {
+	const PathArea &ar = gPaths.areas[cur.area];
+	const PathNode &nd = ar.nodes[cur.node];
+	std::vector<NodeAddr> opts, back;
+	for (int i = 0; i < nd.numLinks; i++) {
+		size_t idx = (size_t)nd.baseLinkId + i;
+		if (idx >= ar.links.size()) continue;
+		NodeAddr t = ar.links[idx];
+		if (!t.valid() || t.area >= 64 || t.node >= gPaths.areas[t.area].nodes.size()) continue;
+		const PathNode &tn = NodeOf(t);
+		if (tn.vehicle || tn.switchedOff) continue;
+		(t.area == prev.area && t.node == prev.node ? back : opts).push_back(t);
+	}
+	std::vector<NodeAddr> &pick = opts.empty() ? back : opts;
+	if (pick.empty()) return false;
+	gPickRng = gPickRng * 1664525u + 1013904223u;
+	out = pick[(gPickRng >> 8) % pick.size()];
+	return true;
+}
+
+void DestroyAmbient(AmbientPed &p) {
+	for (PedPart &pt : p.parts) { gWorld->removeClump(pt.clump); pt.clump->destroy(); }
+	p.parts.clear();
+}
+
+bool SpawnAmbientPed(const PedNodeRef &n, int modelId) {
+	const sa::PedDef *pd = gW.ide.FindPed(modelId);
+	if (!pd) return false;
+	PedAssets &as = gPedAssets[modelId];
+	if (as.dff.empty()) {
+		const sa::ImgV2 &gta3 = gW.archives[0];
+		std::string lm = pd->model, lt = pd->txd;
+		for (char &c : lm) c = (char)tolower((unsigned char)c);
+		for (char &c : lt) c = (char)tolower((unsigned char)c);
+		const sa::ImgEntry *ed = gta3.Find(lm + ".dff"), *et = gta3.Find(lt + ".txd");
+		std::vector<uint8_t> txd;
+		if (!ed || !et || !gta3.Read(*ed, as.dff) || !gta3.Read(*et, txd)) { as.dff.clear(); as.dff.push_back(0); return false; }
+		if (rw::TexDictionary *d = ReadTxd(txd)) as.txds.push_back(d);
+	}
+	if (as.dff.size() < 2) return false;
+	AmbientPed p;
+	if (!AddPedPart(as.dff, as.txds, pd->model.c_str(), nullptr, p.parts)) return false;
+	auto it = gAnims.find("walk_civi");
+	if (it == gAnims.end()) it = gAnims.find("walk_player");
+	if (it == gAnims.end()) { DestroyAmbient(p); return false; }
+	gPickRng = gPickRng * 1664525u + 1013904223u;
+	p.clips.push_back({&it->second, ((gPickRng >> 8) & 0xffff) / 65536.0f * it->second.duration, 1.0f, 0.0f, true});
+	p.cur = n.a; p.prev = n.a; p.model = modelId;
+	float gz;
+	p.pos = {n.x, n.y, GroundHeight(n.x, n.y, n.z + 2.0f, 6.0f, gz) ? gz : n.z};
+	if (!ChooseNextNode(p.cur, p.prev, p.next)) { DestroyAmbient(p); return false; }
+	const PathNode &t = NodeOf(p.next);
+	p.heading = std::atan2(t.x - n.x, t.y - n.y) * 57.29578f;
+	gAmbientPeds.push_back(std::move(p));
+	return true;
+}
+
+void UpdateAmbientPeds(float dt) {
+	static bool init = false;
+	if (!init) { init = true; if (gAnims.empty()) LoadPedAnims(); InitPeds(); }
+	if (!gPathsLoaded || gPedGroups.empty() || getenv("SA_NOPEDS")) return;
+	float hour = std::fmod(gGameMinutes, 1440.0f) / 60.0f;
+	const Zone *z = ZoneAt(camPos.x, camPos.y, camPos.z);
+	int type = 4;
+	if (z) {
+		std::string up = z->name;
+		for (char &c : up) c = (char)toupper((unsigned char)c);
+		auto it = gVM.zonePopType.find(up);
+		if (it != gVM.zonePopType.end()) type = it->second;
+	}
+	const PopCycleRow *row = type >= 0 && type < (int)gPop.types.size() ? &gPop.types[type].rows[0][(int)hour / 2 % 12] : nullptr;
+	size_t maxPeds = row ? (size_t)std::min(row->maxPeds, 30) : 0;
+	float speed = ClipSpeed("walk_civi");
+	if (speed <= 0.0f) speed = ClipSpeed("walk_player");
+	rw::V3d zaxis = {0, 0, 1};
+	for (size_t i = 0; i < gAmbientPeds.size();) {
+		AmbientPed &p = gAmbientPeds[i];
+		float dx = p.pos.x - camPos.x, dy = p.pos.y - camPos.y;
+		bool gone = dx * dx + dy * dy > 110.0f * 110.0f;
+		if (!gone) {
+			const PathNode &t = NodeOf(p.next);
+			float tx = t.x - p.pos.x, ty = t.y - p.pos.y, d = std::sqrt(tx * tx + ty * ty);
+			float step = speed * dt;
+			if (d <= step + 0.05f) {
+				p.prev = p.cur; p.cur = p.next;
+				if (!ChooseNextNode(p.cur, p.prev, p.next)) gone = true;
+			} else {
+				p.pos.x += tx / d * step; p.pos.y += ty / d * step;
+				float want = std::atan2(tx, ty) * 57.29578f, df = std::fmod(want - p.heading + 540.0f, 360.0f) - 180.0f;
+				p.heading += df * std::min(1.0f, 6.0f * dt);
+				float gz;
+				if (GroundHeight(p.pos.x, p.pos.y, p.pos.z + 1.5f, 4.0f, gz)) p.pos.z = gz;
+			}
+		}
+		if (gone) { DestroyAmbient(p); gAmbientPeds.erase(gAmbientPeds.begin() + i); continue; }
+		for (ActiveClip &c : p.clips) c.time = std::fmod(c.time + dt, c.anim->duration);
+		rw::V3d origin = {p.pos.x, p.pos.y, p.pos.z + 1.0f};
+		for (PedPart &pt : p.parts) {
+			PosePart(pt, p.clips);
+			rw::Frame *f = pt.clump->getFrame();
+			f->rotate(&zaxis, -p.heading, rw::COMBINEREPLACE);
+			f->translate(&origin, rw::COMBINEPOSTCONCAT);
+		}
+		i++;
+	}
+	// spawn at most one ped per call, only once the scene is loaded
+	if (!row || gAmbientPeds.size() >= maxPeds || !gPending.empty() || gStreamer->PendingCount() != 0) return;
+	std::vector<const PedNodeRef *> cand;
+	int cx0 = (int)std::floor(camPos.x / 50.0f), cy0 = (int)std::floor(camPos.y / 50.0f);
+	for (int cx = cx0 - 2; cx <= cx0 + 2; cx++)
+		for (int cy = cy0 - 2; cy <= cy0 + 2; cy++) {
+			auto g = gPedNodeGrid.find(PedCellKey(cx, cy));
+			if (g == gPedNodeGrid.end()) continue;
+			for (const PedNodeRef &n : g->second) {
+				float dx = n.x - camPos.x, dy = n.y - camPos.y, d2 = dx * dx + dy * dy;
+				if (d2 >= 30.0f * 30.0f && d2 <= 70.0f * 70.0f && std::fabs(n.z - camPos.z) < 20.0f) cand.push_back(&n);
+			}
+		}
+	if (cand.empty()) return;
+	gPickRng = gPickRng * 1664525u + 1013904223u;
+	const PedNodeRef &n = *cand[(gPickRng >> 8) % cand.size()];
+	for (const AmbientPed &o : gAmbientPeds) { float ox = o.pos.x - n.x, oy = o.pos.y - n.y; if (ox * ox + oy * oy < 1.0f) return; }
+	// ped group from the row's percentages, then a random model of the group
+	gPickRng = gPickRng * 1664525u + 1013904223u;
+	int roll = (int)(((gPickRng >> 8) & 0xffff) / 65536.0f * 100.0f), grp = -1;
+	for (size_t g = 0; g < row->group.size() && g < gPedGroups.size(); g++) { if (roll < row->group[g]) { grp = (int)g; break; } roll -= row->group[g]; }
+	if (grp < 0 || gPedGroups[grp].empty()) return;
+	gPickRng = gPickRng * 1664525u + 1013904223u;
+	const std::string &mn = gPedGroups[grp][(gPickRng >> 8) % gPedGroups[grp].size()];
+	const sa::PedDef *pd = gW.ide.FindPedByModelName(mn);
+	if (pd && SpawnAmbientPed(n, pd->id)) fprintf(gLog, "ambient ped %s group %d at (%.0f,%.0f), %zu alive\n", mn.c_str(), grp, n.x, n.y, gAmbientPeds.size());
 }
 
 bool AttachPlugins() {
@@ -2248,6 +2451,7 @@ void Idle(float dt) {
 	UpdatePed();
 	AnimatePed(dt);
 	UpdateCars();
+	UpdateAmbientPeds(dt);
 	UpdateCamera();
 	gCamera->clear(&Background, rw::Camera::CLEARIMAGE | rw::Camera::CLEARZ);
 	gCamera->beginUpdate();
