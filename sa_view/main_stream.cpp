@@ -1768,6 +1768,7 @@ struct AmbientPed {
 	float heading = 0.0f; // degrees, forward = (sin, cos) like camYaw
 	NodeAddr cur, prev, next;
 	int model = -1;
+	float stepTimer = 0.0f;
 };
 std::vector<AmbientPed> gAmbientPeds;
 struct PedAssets { std::vector<uint8_t> dff; std::vector<rw::TexDictionary *> txds; };
@@ -1913,6 +1914,16 @@ void UpdateAmbientPeds(float dt) {
 		}
 		if (gone) { DestroyAmbient(p); gAmbientPeds.erase(gAmbientPeds.begin() + i); continue; }
 		for (ActiveClip &c : p.clips) c.time = std::fmod(c.time + dt, c.anim->duration);
+		// footsteps: generic bank (CAEPedAudioEntity: non-player peds always use it, 3 dB quieter), two per clip loop. DEVIATION: volume falls off with distance (quadratic, silent beyond 30 m) instead of 3D attenuation / panning.
+		p.stepTimer -= dt;
+		if (p.stepTimer <= 0.0f) {
+			p.stepTimer = p.clips[0].anim->duration * 0.5f;
+			float dist = std::sqrt(dx * dx + dy * dy);
+			if (dist < 30.0f && gFeetBank.sounds.size() >= 6 && !getenv("SA_MUTE")) {
+				float k = 1.0f - dist / 30.0f;
+				PlaySfx(gFeetBank.sounds[1 + (((uint32_t)i * 7u + (uint32_t)(p.pos.x * 13.0f)) % 5)], 0.56f * k * k);
+			}
+		}
 		rw::V3d origin = {p.pos.x, p.pos.y, p.pos.z + 1.0f};
 		for (PedPart &pt : p.parts) {
 			PosePart(pt, p.clips);
