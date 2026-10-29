@@ -1450,8 +1450,38 @@ void DrawWater() {
 	rw::SetRenderState(rw::CULLMODE, rw::CULLBACK);
 }
 
+// CWeather::Update wind (0x72C398..0x72C63C); tables at 0x8D5E50 / 0x8D5FF8 / 0x8D6038 read from the exe.
+struct WindState { float wind; rw::V3d dir; };
+WindState WeatherWind(unsigned timeMs) {
+	static const float kWindForWeather[23] = {0, 0.25f, 0, 0.2f, 0.7f, 0.25f, 0, 0.7f, 1.0f, 0, 0.2f, 0, 0.4f, 0, 0.3f, 0.7f, 1.0f, 0, 0.3f, 1.5f, 0, 0, 0};
+	static const float kScale[16] = {1.0f, 0.5f, 1.0f, 0.2f, 0.4f, 1.0f, 1.0f, 1.0f, 1.0f, 0.8f, 0.0f, 1.0f, 1.0f, 0.7f, 1.0f, 1.0f};
+	static const float kOff[16] = {0.5f, -0.3f, 0.8f, 0.0f, -0.4f, -0.8f, 0.3f, -0.1f, -0.9f, -0.5f, 0.7f, 0.7f, 0.3f, 0.7f, 0.0f, -0.5f};
+	float wf = gWeatherForced ? 1.0f : std::fmod(gGameMinutes, 60.0f) / 60.0f;
+	float a = kWindForWeather[gOldWeather % 23], b = kWindForWeather[gWeather % 23];
+	WindState w;
+	w.wind = a + (b - a) * wf;
+	float wc = std::min(w.wind, 1.0f);
+	auto lerpf = [](float x, float y, float t) { return x + (y - x) * t; };
+	auto off = [&](size_t i, float t) { return lerpf(kOff[i % 16], kOff[(i + 1) % 16], t); };
+	size_t slow = (timeMs / 1024) % 16;
+	float slowT = 0.5f - std::cos((float)(timeMs % 1024) / 1024.0f * 3.14159265f) * 0.5f;
+	float wx = off(slow, slowT) * wc * 0.4f + wc * 0.7f, wy = off(slow + 3, slowT) * wc * 0.4f + wc * 0.7f;
+	float wz = off(slow + 6, slowT) * wc * 0.2f;
+	float gust = (wc - 0.5f) * 0.4f;
+	if (gust > 0.0f) {
+		size_t fast = (timeMs / 256) % 16;
+		float fastT = (float)(timeMs % 256) / 256.0f;
+		wx += off(fast, fastT) * gust; wy += off(fast + 3, fastT) * gust; wz += off(fast + 6, fastT) * gust;
+	}
+	size_t si = (timeMs / 2048) % 16;
+	float sT = 0.5f - std::cos((float)(timeMs % 2048) / 2048.0f * 3.14159265f) * 0.5f;
+	float sc = lerpf(kScale[si], kScale[(si + 1) % 16], sT);
+	w.dir = {sc * wx, sc * wy, sc * wz};
+	return w;
+}
+
 // CWeather::RenderRainStreaks (0x72AF70) + the Rain step in CWeather::Update (0x72BBE1): 32 line streaks in a 5 m box 6 m ahead of the camera.
-// DEVIATIONS: Wind/WindDir taken as 0 (streaks fall straight), FogReduction as 0, no rain particles/splashes/puddles/wet roads, no CullZone no-rain test.
+// DEVIATIONS: FogReduction as 0, no rain particles/splashes/puddles/wet roads, no CullZone no-rain test.
 float gRain = 0.0f;
 int gRainStrength = 0;
 
@@ -1472,6 +1502,7 @@ void DrawRain(float dt, unsigned tms) {
 	static uint8_t pa[32];
 	auto rnd = [](float lo, float hi) { return lo + (hi - lo) * ((float)rand() / (float)RAND_MAX); };
 	rw::Matrix *m = &gCamera->getFrame()->matrix;
+	WindState ws = WeatherWind(tms);
 	std::vector<rw::RWDEVICE::Im3DVertex> verts;
 	std::vector<rw::uint16> idx;
 	for (int s = 0; s < 32; s++) {
@@ -1486,9 +1517,12 @@ void DrawRain(float dt, unsigned tms) {
 		float o1z = oz + rnd(0.1f, 0.5f);
 		uint8_t al[2] = {pa[s], (uint8_t)(pa[s] / 2u)};
 		float oz2[2] = {oz, o1z};
+		float posMul = (s % 2) ? ws.wind * 0.1f : ws.wind * gRain * 0.1f;
+		float ex[2] = {ox, ox - ws.dir.x * posMul}, ey[2] = {oy, oy - ws.dir.y * posMul};
+		oz2[1] -= ws.dir.z * posMul;
 		for (int v = 0; v < 2; v++) {
 			rw::RWDEVICE::Im3DVertex iv;
-			iv.setX((float)px[s] + ox); iv.setY((float)py[s] + oy); iv.setZ((float)pz[s] + oz2[v]);
+			iv.setX((float)px[s] + ex[v]); iv.setY((float)py[s] + ey[v]); iv.setZ((float)pz[s] + oz2[v]);
 			if (getenv("SA_RAINDEBUG")) iv.setColor(255, 0, 0, 255); else iv.setColor(210, 210, 230, al[v]);
 			iv.setU(0.0f); iv.setV(0.0f);
 			idx.push_back((rw::uint16)verts.size());
