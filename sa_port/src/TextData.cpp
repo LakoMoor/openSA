@@ -227,3 +227,14 @@ std::vector<std::pair<int, std::string>> IdeDb::AllModels() const {
 }
 
 } // namespace sa
+
+const sa::VehicleDef *sa::IdeDb::FindVehicleByModelName(const std::string &lowerName) const
+{
+	for (const auto &kv : m_vehicles) {
+		std::string m = kv.second.model;
+		for (char &ch : m) ch = (char)tolower((unsigned char)ch);
+		if (m == lowerName)
+			return &kv.second;
+	}
+	return nullptr;
+}

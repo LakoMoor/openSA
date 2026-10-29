@@ -27,6 +27,8 @@ namespace rw { namespace d3d { extern IDirect3DDevice9 *d3ddevice; } }
 #include "WaterDat.h"
 #include "Streamer.h"
 #include "StreamingWorld.h"
+#include "ScriptVM.h"
+#include "PopCycle.h"
 
 rw::EngineOpenParams engineOpenParams;
 
@@ -345,7 +347,7 @@ void LoadColBounds() {
 }
 
 // IPL car generators (placement of parked vehicles, see UpdateCars)
-struct CarGen { rw::V3d pos; float angle; int model, c1, c2; rw::Clump *clump = nil; bool tried = false; int inst = -1; bool ignorePop = false; };
+struct CarGen { rw::V3d pos; float angle; int model, c1, c2; rw::Clump *clump = nil; bool tried = false; int inst = -1; bool ignorePop = false; bool randomModel = false; };
 std::vector<CarGen> gCarGens;
 
 void CollectPlacements() {
@@ -402,7 +404,7 @@ void CollectPlacements() {
 			if (it != localToGlobal.end()) parent = &it->second;
 		}
 		for (auto &cg : b.carGens)
-			if (cg.modelId >= 400 && gW.ide.FindVehicle(cg.modelId)) { gCarGens.push_back({{cg.pos[0], cg.pos[1], cg.pos[2]}, cg.angle, cg.modelId, cg.color1, cg.color2}); gCarGens.back().ignorePop = (cg.flags & 2) != 0; }
+			if (cg.modelId == -1) { gCarGens.push_back({{cg.pos[0], cg.pos[1], cg.pos[2]}, cg.angle, -1, cg.color1, cg.color2}); gCarGens.back().ignorePop = (cg.flags & 2) != 0; gCarGens.back().randomModel = true; } else if (cg.modelId >= 400 && gW.ide.FindVehicle(cg.modelId)) { gCarGens.push_back({{cg.pos[0], cg.pos[1], cg.pos[2]}, cg.angle, cg.modelId, cg.color1, cg.color2}); gCarGens.back().ignorePop = (cg.flags & 2) != 0; }
 		for (auto &i : b.insts) {
 			int g = add(i.modelId, i.pos[0], i.pos[1], i.pos[2], i.rot, i.flags & 0xFF);
 			if (g >= 0 && parent && i.lodIndex >= 0 && i.lodIndex < (int)parent->size() && (*parent)[i.lodIndex] >= 0)
@@ -1469,6 +1471,41 @@ const Zone *ZoneAt(float x, float y, float z) {
 
 const char *ZoneNameAt(float x, float y, float z) { const Zone *q = ZoneAt(x, y, z); return q ? q->name.c_str() : "-"; }
 
+ScriptVM gVM;
+PopCycle gPop;
+uint32_t gPickRng = 0x1234567;
+
+// Random generator model. Original: CCarGenerator picks from CPopulation::m_AppropriateLoadedCars (cars streamed for the player's zone) via
+// CLoadedCarGroup::PickRandomCar(true, true): weighted by IDE frequency, normal/poor/rich/motorbike classes only, at most 2 live instances.
+// DEVIATION: no car streaming here, so the candidates are the cargrp.dat group chosen from the player zone's popcycle row; refcount and bounding-length checks are skipped.
+int PickRandomGeneratorModel(float hour, bool weekend) {
+	const Zone *z = ZoneAt(camPos.x, camPos.y, camPos.z);
+	if (!z) return -1;
+	std::string up = z->name;
+	for (char &c : up) c = (char)toupper((unsigned char)c);
+	auto it = gVM.zonePopType.find(up);
+	int type = it != gVM.zonePopType.end() ? it->second : 4; // RESIDENTIAL_AVERAGE default of CZoneInfo
+	auto rnd = [&]() { gPickRng = gPickRng * 1664525u + 1013904223u; return ((gPickRng >> 8) & 0xffff) / 65536.0f; };
+	for (int tries = 0; tries < 10; tries++) {
+		int grp = gPop.pickGroup(type, (int)hour, weekend, rnd());
+		if (grp < 0 || grp >= (int)gPop.carGroups.size()) continue;
+		struct C { int id, frq; };
+		std::vector<C> cand;
+		int sum = 0;
+		for (const std::string &n : gPop.carGroups[grp]) {
+			const sa::VehicleDef *vd = gW.ide.FindVehicleByModelName(n);
+			if (!vd) continue;
+			if (vd->vclass != "normal" && vd->vclass != "poorfamily" && vd->vclass != "richfamily" && vd->vclass != "motorbike") continue;
+			cand.push_back({vd->id, vd->frequency}); sum += vd->frequency;
+		}
+		if (cand.empty() || sum <= 0) continue;
+		int w = (int)(rnd() * sum);
+		for (const C &c : cand) { if (c.frq >= w) return c.id; w -= c.frq; }
+		return cand.back().id;
+	}
+	return -1;
+}
+
 void UpdateCars() {
 	// CCarGenerator::DoInternalProcessing: unless the generator ignores the population limit, no new parked car while NumParkedCars >= 5 (10 between 21:00 and 07:00).
 	// DEVIATION: NumParkedCars here counts only the cars shown by this viewer (the original also counts random-model ones and applies delays / probability).
@@ -1476,12 +1513,27 @@ void UpdateCars() {
 	int parkedLimit = (hour >= 21.0f || hour < 7.0f) ? 10 : 5, parked = 0;
 	for (const CarGen &g : gCarGens) if (g.clump && !g.ignorePop) parked++;
 	static bool init = false;
-	if (!init) { init = true; LoadCarcols(); LoadZones(); fprintf(gLog, "car generators with a fixed vehicle model: %zu\n", gCarGens.size()); }
+	if (!init) {
+		init = true; LoadCarcols(); LoadZones();
+		size_t fixedN = 0; for (const CarGen &g : gCarGens) if (!g.randomModel) fixedN++;
+		fprintf(gLog, "car generators: %zu fixed model, %zu random model\n", fixedN, gCarGens.size() - fixedN);
+		// Run main.scm headless for 4 s of game time so INITIAL sets the zone population types.
+		if (gVM.load(gameDir + "/data/script/main.scm")) {
+			for (int i = 0, stable = 0; i < 200 && stable < 5; i++) { size_t before = gVM.zonePopType.size(); gVM.tick(20); stable = (before == gVM.zonePopType.size() && before > 0) ? stable + 1 : 0; }
+			fprintf(gLog, "script: %zu threads, %llu commands, %zu zone population types\n", gVM.threadCount(), (unsigned long long)gVM.commandsRun, gVM.zonePopType.size());
+		}
+		if (!gPop.load(gameDir + "/data/popcycle.dat", gameDir + "/data/cargrp.dat")) fprintf(gLog, "popcycle.dat / cargrp.dat failed to load\n");
+	}
 	for (CarGen &g : gCarGens) {
 		float dx = g.pos.x - camPos.x, dy = g.pos.y - camPos.y, d2 = dx * dx + dy * dy;
 		if (g.clump && d2 > (kCarSpawnRange + 50.0f) * (kCarSpawnRange + 50.0f)) { gWorld->removeClump(g.clump); g.clump->destroy(); g.clump = nil; g.tried = false; gInsts[g.inst].col = nil; continue; }
 		if (d2 >= kCarSpawnRange * kCarSpawnRange || g.clump || g.tried) continue;
 		if (!g.ignorePop && parked >= parkedLimit) continue;
+		if (g.model < 0) {
+			g.model = PickRandomGeneratorModel(hour, false);
+			if (g.model < 0) { g.tried = true; continue; }
+			if (!g.ignorePop && parked >= parkedLimit) continue;
+		}
 		VehProto *vp = GetVehicleProto(g.model, g.c1, g.c2);
 		if (!vp) { g.tried = true; continue; }
 		float gz;
