@@ -912,16 +912,32 @@ float ClipSpeed(const char *name) {
 	return 0.0f;
 }
 
+// Active clips, blended like CAnimManager::BlendAnimation: the selected clip fades in with delta kBlendDelta per second, every other clip
+// fades out by its own amount * kBlendDelta (at least 0.05) and is dropped at 0. UpdateBlend: amount += delta * ts (ts in seconds).
+// kBlendDelta = 4.0 is the CTaskSimpleRunAnim default read from gta-reversed (CTaskSimpleRunAnim.h), NOT yet checked in the exe.
+struct ActiveClip { const sa::IfpAnim *anim; float time, amount, delta; bool loop; };
+std::vector<ActiveClip> gClips;
+constexpr float kBlendDelta = 4.0f;
+
 void SelectPedAnim(const char *name, bool loop = true) {
 	auto it = gAnims.find(name);
-	if (it != gAnims.end() && gPedAnim != &it->second) { gPedAnim = &it->second; gAnimTime = 0.0f; }
+	if (it == gAnims.end()) return;
+	const sa::IfpAnim *a = &it->second;
+	gPedAnim = a;
 	gAnimLoop = loop;
+	ActiveClip *running = nil;
+	for (ActiveClip &c : gClips) {
+		if (c.anim == a) { running = &c; continue; }
+		c.delta = c.amount <= 0.0f ? -1.0f : std::min(-0.05f, -c.amount * kBlendDelta);
+	}
+	if (running) { running->delta = (1.0f - running->amount) * kBlendDelta; running->loop = loop; return; }
+	gClips.push_back({a, 0.0f, gClips.empty() ? 1.0f : 0.0f, gClips.empty() ? 0.0f : kBlendDelta, loop});
 }
 
 void AnimatePed(float dt) {
-	// DEVIATION: the original blends clips through the ped task system; this just switches between idle / walk / run
+	// clip choice is a simplified stand-in for the ped task system; transitions are blended (see ActiveClip)
 	bool moving = sk::keys['W'] || sk::keys['A'] || sk::keys['S'] || sk::keys['D'];
-	// jump: jump_launch (once) -> jump_glide while airborne -> jump_land (once) after touching down. DEVIATION: no blending between clips.
+	// jump: jump_launch (once) -> jump_glide while airborne -> jump_land (once) after touching down.
 	bool air = gWalk && !gGrounded && !gSwimming;
 	if (gWasAirborne && !air && gWalk && !gSwimming) { auto it = gAnims.find("jump_land"); gLandTimer = it != gAnims.end() ? it->second.duration : 0.0f; }
 	gWasAirborne = air;
@@ -931,23 +947,53 @@ void AnimatePed(float dt) {
 	else if (air) SelectPedAnim(gLaunchTimer > 0.0f ? "jump_launch" : "jump_glide", gLaunchTimer <= 0.0f);
 	else if (gLandTimer > 0.0f) SelectPedAnim("jump_land", false);
 	else SelectPedAnim(PedClip(moving));
-	if (gPedParts.empty() || !gPedAnim || gPedAnim->duration <= 0) return;
-	gAnimTime = gAnimLoop ? std::fmod(gAnimTime + dt, gPedAnim->duration) : std::min(gAnimTime + dt, gPedAnim->duration);
+	if (gPedParts.empty() || gClips.empty()) return;
+	for (size_t i = 0; i < gClips.size();) {
+		ActiveClip &c = gClips[i];
+		c.amount += c.delta * dt;
+		if (c.amount <= 0.0f && c.delta < 0.0f && gClips.size() > 1) { gClips.erase(gClips.begin() + i); continue; }
+		c.amount = std::min(1.0f, std::max(0.0f, c.amount));
+		if (c.amount >= 1.0f && c.delta > 0.0f) c.delta = 0.0f;
+		if (c.anim->duration > 0)
+			c.time = c.loop ? std::fmod(c.time + dt, c.anim->duration) : std::min(c.time + dt, c.anim->duration);
+		i++;
+	}
+	gAnimTime = 0.0f;
+	for (const ActiveClip &c : gClips) if (c.anim == gPedAnim) gAnimTime = c.time;
 	for (PedPart &part : gPedParts) {
 		if (!part.hier) continue;
-		for (const sa::IfpSeq &sq : gPedAnim->seqs) {
-			int ni = part.hier->getIndex(sq.boneTag);
-			if (ni < 0 || sq.keys.empty()) continue;
+		// per bone: weighted nlerp over the active clips that animate it (weights normalised), translation lerped the same way
+		struct Acc { float q[4] = {0, 0, 0, 0}, t[3] = {0, 0, 0}, w = 0, tw = 0; };
+		std::unordered_map<int, Acc> acc;
+		for (const ActiveClip &c : gClips) {
+			if (c.amount <= 0.0f) continue;
+			for (const sa::IfpSeq &sq : c.anim->seqs) {
+				if (sq.keys.empty() || part.hier->getIndex(sq.boneTag) < 0) continue;
+				rw::Quat q = SampleQuat(sq.keys, c.time);
+				Acc &a = acc[sq.boneTag];
+				float sgn = (a.w > 0 && a.q[0] * q.x + a.q[1] * q.y + a.q[2] * q.z + a.q[3] * q.w < 0) ? -1.0f : 1.0f;
+				a.q[0] += sgn * q.x * c.amount; a.q[1] += sgn * q.y * c.amount; a.q[2] += sgn * q.z * c.amount; a.q[3] += sgn * q.w * c.amount;
+				a.w += c.amount;
+				if (sq.hasTrans) {
+					const sa::IfpKey &k = sq.keys[0];
+					a.t[0] += k.t[0] * c.amount; a.t[1] += k.t[1] * c.amount; a.t[2] += k.t[2] * c.amount;
+					a.tw += c.amount;
+				}
+			}
+		}
+		for (auto &kv : acc) {
+			Acc &a = kv.second;
+			int ni = part.hier->getIndex(kv.first);
 			rw::Frame *fr = part.hier->nodeInfo[ni].frame;
 			if (!fr) continue;
-			rw::Quat q = SampleQuat(sq.keys, gAnimTime);
+			float l = std::sqrt(a.q[0] * a.q[0] + a.q[1] * a.q[1] + a.q[2] * a.q[2] + a.q[3] * a.q[3]);
+			if (l <= 0) continue;
+			rw::Quat q;
+			q.x = a.q[0] / l; q.y = a.q[1] / l; q.z = a.q[2] / l; q.w = a.q[3] / l;
 			rw::Matrix m;
 			rw::Matrix::makeRotation(&m, q);
 			fr->matrix.right = m.right; fr->matrix.up = m.up; fr->matrix.at = m.at;
-			if (sq.hasTrans) {
-				const sa::IfpKey &k = sq.keys[0];
-				fr->matrix.pos = {k.t[0], k.t[1], k.t[2]};
-			}
+			if (a.tw > 0) fr->matrix.pos = {a.t[0] / a.tw, a.t[1] / a.tw, a.t[2] / a.tw};
 			fr->matrix.update();
 		}
 		part.clump->getFrame()->updateObjects();
