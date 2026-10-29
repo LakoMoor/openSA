@@ -31,6 +31,7 @@ namespace rw { namespace d3d { extern IDirect3DDevice9 *d3ddevice; } }
 #include "PopCycle.h"
 #include "PathNodes.h"
 #include "AudioBank.h"
+#include <sstream>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <mmsystem.h>
@@ -537,6 +538,7 @@ float RayBox(const rw::V3d &o, const rw::V3d &d, const sa::ColBox &b) {
 
 // Highest collision surface at or below zFrom (searching down to zFrom - maxDrop); returns false when there is none.
 // Big buildings (LOD models) have collision disabled in the original (CEntity::SetupBigBuilding), so they are skipped.
+int gGroundMaterial = 0; // SA surface id (COL triangle material) of the last GroundHeight hit; boxes carry no material here (0)
 bool GroundHeight(float x, float y, float zFrom, float maxDrop, float &outZ) {
 	bool found = false;
 	float best = zFrom - maxDrop;
@@ -553,16 +555,17 @@ bool GroundHeight(float x, float y, float zFrom, float maxDrop, float &outZ) {
 				rw::V3d o = QuatRotate(in.rot, {x - in.pos.x, y - in.pos.y, zFrom - in.pos.z}, true);
 				rw::V3d d = QuatRotate(in.rot, {0, 0, -1}, true);
 				float tBest = zFrom - best; // only hits nearer than the current best are interesting
+				int mat = 0;
 				const std::vector<float> &vs = in.col->verts;
 				for (const sa::ColTri &t : in.col->tris) {
 					float h = RayTri(o, d, &vs[t.a * 3], &vs[t.b * 3], &vs[t.c * 3]);
-					if (h >= 0 && h < tBest) tBest = h;
+					if (h >= 0 && h < tBest) { tBest = h; mat = t.material; }
 				}
 				for (const sa::ColBox &b : in.col->boxes) {
 					float h = RayBox(o, d, b);
-					if (h >= 0 && h < tBest) tBest = h;
+					if (h >= 0 && h < tBest) { tBest = h; mat = 0; }
 				}
-				if (tBest < zFrom - best) { best = zFrom - tBest; found = true; }
+				if (tBest < zFrom - best) { best = zFrom - tBest; found = true; gGroundMaterial = mat; }
 			}
 		}
 	if (found) outZ = best;
@@ -1185,11 +1188,13 @@ void UpdatePed() {
 // ---- Audio (first slice: player footsteps) ----
 // ORIGINAL: CAEPedAudioEntity::HandleAnimEvent plays the foot sounds from animation events, the bank follows the contact surface (grass / sand / gravel /
 // wood / tile / metal / generic for concrete), through CAESoundManager with 3D attenuation and mixing.
-// DEVIATIONS: always the generic bank (bank 0, sounds 1..5 as PlayRandomGenericFootstepSound) - no surface detection; steps are timed as two per
+// DEVIATIONS: bank chosen by the COL surface under the feet via surfaud.dat (surface id = COL triangle material, row order of surfaud.dat assumed to equal the id; box colliders count as surface 0; water plays nothing); steps are timed as two per
 // clip loop instead of from the animation's events; flat volume, no 3D positioning, no other sounds (ambient peds, vehicles, radio, weapons, ambience).
 // A pool of 8 waveOut devices plays one sound each (the original mixes through its own software mixer).
 SfxBanks gSfx;
-SfxBank gFeetBank;
+SfxBank gFeetBank, gSurfBank[7];
+bool gSurfLoaded[7] = {};
+std::vector<std::string> gSurfAud; // surfaud.dat rows, index = surface id (line order of the data rows)
 bool gSfxReady = false;
 struct WaveVoice { HWAVEOUT h = nullptr; WAVEHDR hdr = {}; std::vector<int16_t> buf; bool used = false; };
 WaveVoice gVoices[8];
@@ -1214,6 +1219,31 @@ void PlaySfx(const SfxSound &s, float vol) {
 	}
 }
 
+// Surface id -> audio class from surfaud.dat (columns CON GRS SND GRV WOD WTR MTL LGS TIL). Returns the footstep bank (0 generic, 1 grass, 2 gravel, 3 metal, 4 sand, 5 tile, 6 wood) or -1 for water.
+int FootBankForSurface(int mat) {
+	if (gSurfAud.empty()) {
+		std::ifstream f(gameDir + "/data/surfaud.dat");
+		std::string line;
+		while (std::getline(f, line)) {
+			if (line.empty() || line[0] == '#' || line[0] == ' ' || line[0] == '	' || line[0] == '') continue;
+			gSurfAud.push_back(line);
+		}
+	}
+	if (mat < 0 || mat >= (int)gSurfAud.size()) return 0;
+	std::istringstream ss(gSurfAud[mat]);
+	std::string name; int v[9] = {};
+	ss >> name;
+	for (int &x : v) ss >> x;
+	if (v[5]) return -1;
+	if (v[1] || v[7]) return 1;
+	if (v[2]) return 4;
+	if (v[3]) return 2;
+	if (v[4]) return 6;
+	if (v[8]) return 5;
+	if (v[6]) return 3;
+	return 0;
+}
+
 void UpdateFootsteps(float dt) {
 	static float timer = 0.0f;
 	if (!gSfxReady) {
@@ -1230,7 +1260,17 @@ void UpdateFootsteps(float dt) {
 	timer = interval;
 	static uint32_t rng = 0x2468ace;
 	rng = rng * 1664525u + 1013904223u;
-	PlaySfx(gFeetBank.sounds[1 + (rng >> 8) % 5], 0.8f);
+	// bank by the surface under the feet (CAEPedAudioEntity::HandleFootstepEvent order: water, concrete, grass, sand, gravel, wood, tile, metal); sound ranges as read there
+	float gz; int bank = 0;
+	if (GroundHeight(camPos.x, camPos.y, camPos.z, 3.0f, gz)) bank = FootBankForSurface(gGroundMaterial);
+	{ static int lastBank = -9; if (bank != lastBank) { lastBank = bank; fprintf(gLog, "footstep surface %d -> bank %d\n", gGroundMaterial, bank); } }
+	if (bank < 0) return; // water: the swimming bank is not ported
+	if (bank > 0 && !gSurfLoaded[bank]) { gSurfLoaded[bank] = true; gSfx.loadBank(bank, gSurfBank[bank]); }
+	if (bank > 0 && gSurfBank[bank].sounds.size() >= 3) {
+		static const int kCount[7] = {0, 5, 5, 5, 4, 5, 5};
+		const SfxBank &b = gSurfBank[bank];
+		PlaySfx(b.sounds[(rng >> 8) % std::min<size_t>(kCount[bank], b.sounds.size())], 0.8f);
+	} else PlaySfx(gFeetBank.sounds[1 + (rng >> 8) % 5], 0.8f);
 }
 
 void UpdateCamera() {
