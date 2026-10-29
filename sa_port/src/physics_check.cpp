@@ -23,4 +23,12 @@ int main(int argc, char **argv)
 	}
 	in.gas = 0; in.brake = 1.0f;
 	for (int sec = 1; sec <= 6; sec++) { for (int t = 0; t < 50; t++) car.step(1.0f, in, flat); std::printf("brake t=%ds speed %.1f km/h\n", sec, car.forwardSpeed() * 50.0f * 3.6f); }
+	// crash test: 60 km/h head-on into a wall plane at the front bumper, then 20 km/h
+	for (float kmh : {20.0f, 60.0f, 100.0f}) {
+		vp::CarPhysics c; c.init(h, wp, 0.7f); c.place({0, 0, 0.5f}, 0);
+		for (int t = 0; t < 30; t++) c.step(1.0f, vp::Input(), flat);
+		c.moveSpeed = c.fwd * (kmh / 3.6f / 50.0f);
+		float imp = c.hitStatic({0, 2.3f, 0}, {0, -1, 0});
+		std::printf("crash %.0f km/h: impulse %.1f health %.1f speed after %.1f km/h\n", kmh, imp, c.health, c.forwardSpeed() * 50.0f * 3.6f);
+	}
 }

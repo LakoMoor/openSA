@@ -64,6 +64,9 @@ public:
 
 	V3 mul3(const V3 &l) const { return right * l.x + fwd * l.y + up * l.z; }
 	V3 getSpeed(const V3 &r) const { return moveSpeed + moveFriction + cross(turnSpeed + turnFriction, r); }
+	float health = 1000.0f, damageMult = 1.0f;
+	// Static-wall hit (CPhysical::ApplyCollision static-B branch, reVC) + CAutomobile::VehicleDamage health loss; returns the impulse, 0 if moving away. `point` relative to the car centre.
+	float hitStatic(const V3 &point, const V3 &n);
 	void applyForce(const V3 &f, const V3 &point);   // CPhysical::ApplyForce(.., true)
 	void applyMoveForce(const V3 &j) { moveSpeed += j / mass; }
 	void applyTurnForce(const V3 &j, const V3 &point) { turnSpeed += cross(point - mul3(com), j) / turnMass; }

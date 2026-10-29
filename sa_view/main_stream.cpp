@@ -1830,24 +1830,8 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 				n = vp::norm(n);
 				gPhys.pos.x += n.x * ct.depth; gPhys.pos.y += n.y * ct.depth;
 				vp::V3 pt = {c.x - n.x * 0.9f - gPhys.pos.x, c.y - n.y * 0.9f - gPhys.pos.y, c.z - gPhys.pos.z};
-				float sp = vp::dot(gPhys.getSpeed(pt), n);
-				{ static int dbg = 0; if (getenv("SA_COLDBG") && dbg++ % 25 == 0 && dbg < 600) fprintf(gLog, "col k=%d n=(%.2f %.2f %.2f) depth %.3f sp %.4f fwd (%.2f %.2f) v (%.4f %.4f) w %.4f\n", k, ct.n.x, ct.n.y, ct.n.z, ct.depth, sp, gPhys.fwd.x, gPhys.fwd.y, gPhys.moveSpeed.x, gPhys.moveSpeed.y, gPhys.turnSpeed.z); }
-				if (sp >= 0.0f) continue;
-				float imp = -(1.0f + 0.05f) * sp * gPhys.massAt(pt, n);
-				vp::V3 f = n * imp;
-				gPhys.applyMoveForce(f); gPhys.applyTurnForce(f, pt);
-				// CAutomobile::VehicleDamage health loss (0x6A8052): (impulse - mass/1500*25) * damageMult * 0.6 * collForceMult, /2 for the player vehicle. ASSUMED: impulse == m_fDamageIntensity,
-				// collForceMult 1/3 (default), damageMult scaled by 2000/mass as ConvertDataToGameUnits does. Health starts at 1000, only logged / no visual damage, no explosion.
-				if (gDriveHandling) {
-					float minDmg = gDriveHandling->mass / 1500.0f * 25.0f;
-					if (imp > minDmg) {
-						float dm = gDriveHandling->damageMult * 2000.0f / gDriveHandling->mass;
-						float loss = (imp - minDmg) * dm * 0.6f * (1.0f / 3.0f) / 2.0f;
-						static float health = 1000.0f;
-						health -= loss;
-						fprintf(gLog, "car damage: impulse %.1f loss %.1f health %.1f\n", imp, loss, health);
-					}
-				}
+				float before = gPhys.health, imp = gPhys.hitStatic(pt, n);
+				if (imp > 0.0f && gPhys.health < before) fprintf(gLog, "car damage: impulse %.1f loss %.1f health %.1f\n", imp, before - gPhys.health, gPhys.health);
 			}
 		}
 	}

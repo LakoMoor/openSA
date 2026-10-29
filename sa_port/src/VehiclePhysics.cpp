@@ -15,7 +15,7 @@ static float sq(float v) { return v * v; }
 void CarPhysics::init(const HandlingData &h, const V3 wp[4], float wsize) {
 	mass = h.mass; turnMass = h.turnMass; dragMult = h.dragMult;
 	com = {h.com[0], h.com[1], h.com[2]};
-	tractionMult = h.tractionMult; tractionLoss = h.tractionLoss; tractionBias = h.tractionBias;
+	damageMult = h.damageMult * 2000.0f / h.mass; tractionMult = h.tractionMult; tractionLoss = h.tractionLoss; tractionBias = h.tractionBias;
 	numGears = std::max(1, std::min(h.numGears, 6));
 	driveType = h.driveType;
 	engineInertia = h.engineInertia;
@@ -291,6 +291,18 @@ void CarPhysics::step(float ticks, const Input &in, const GroundFn &ground) {
 		right += cross(tv, right); fwd += cross(tv, fwd); up += cross(tv, up);
 		orthonormalise();
 	}
+}
+
+float CarPhysics::hitStatic(const V3 &pt, const V3 &n) {
+	float sp = dot(getSpeed(pt), n);
+	if (sp >= 0.0f) return 0.0f;
+	float imp = -(1.0f + 0.05f) * sp * massAt(pt, n);   // elasticity 0.05 ASSUMED
+	V3 f = n * imp;
+	applyMoveForce(f); applyTurnForce(f, pt);
+	// VehicleDamage (0x6A8052): (impulse - mass/1500*25) * damageMult * 0.6 * collForceMult, /2 for the player vehicle. ASSUMED: impulse == m_fDamageIntensity, collForceMult 1/3
+	float minDmg = mass / 1500.0f * 25.0f;
+	if (imp > minDmg) health -= (imp - minDmg) * damageMult * 0.6f * (1.0f / 3.0f) / 2.0f;
+	return imp;
 }
 
 }
