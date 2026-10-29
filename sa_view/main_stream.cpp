@@ -1331,6 +1331,20 @@ void UpdateEngine() {
 // Horn of the driven car: bank GENRL_HORN (74), sound id and pitch per model from the VehicleAudioSettings table (HornTable.inc, order = model id 400..631, copied from the
 // gta-reversed table at 0x860AF0; not re-read in the exe). Key H (ASSUMED binding). DEVIATIONS: the original loops the sound while the horn is on; here it is retriggered
 // when the previous play would have ended; flat volume, no 3D / doppler / roll-off; bikes (bell, id 0) play the plain sound without the bell fade-out.
+// Weapon fire sound, first slice: key X on foot plays the Desert Eagle shot (GENRL_WEAPONS bank 143, sound 6 = EAGLE_SHOT_L; sound ids from gta-reversed SoundIDs.h, bank id from eSoundBank.h,
+// not re-read in the exe). DEVIATIONS: no weapon system / ammo / reload, the original's PlayGunSounds layers shot + lows + tail with per-event volume/pitch, one fixed 8 shots/s cadence.
+void UpdateWeaponSound(float dt) {
+	static SfxBank bank;
+	static bool loaded = false;
+	static float timer = 0.0f;
+	timer -= dt;
+	if (gDriveGen >= 0 || !gWalk || !sk::keys['X'] || getenv("SA_MUTE") || timer > 0.0f) return;
+	if (!loaded) { loaded = true; gSfx.loadBank(143, bank); fprintf(gLog, "weapon bank: %zu sounds\n", bank.sounds.size()); }
+	if (bank.sounds.size() <= 6) return;
+	timer = 0.125f;
+	PlaySfx(bank.sounds[6], 0.9f, 1.0f);
+}
+
 void UpdateHorn(float dt) {
 	static const struct { int type; float pitch; } kHorn[] = {
 #include "HornTable.inc"
@@ -3206,6 +3220,7 @@ void Idle(float dt) {
 	AnimatePed(dt);
 	UpdateFootsteps(dt);
 	UpdateHorn(dt);
+	UpdateWeaponSound(dt);
 	UpdateEngine();
 	UpdateCars();
 	UpdateAmbientPeds(dt);
