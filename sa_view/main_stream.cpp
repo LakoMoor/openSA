@@ -1398,6 +1398,7 @@ const char *FrameName(rw::Frame *f) { return nodeNameOffset >= 0 && f ? PLUGINOF
 struct VehProto { rw::Clump *clump = nil; float minZ = 0; sa::ColModel col; bool hasCol = false; };
 std::unordered_map<int, VehProto> gVehProtos;
 std::vector<rw::RGBA> gCarPalette;
+std::unordered_map<std::string, std::vector<std::pair<int, int>>> gCarAllPairs; // lower-case model -> every carcols.dat primary/secondary pair
 std::unordered_map<std::string, std::vector<int>> gCarPairs; // lower-case model -> first colour pair (4 indices)
 constexpr float kCarSpawnRange = 150.0f;
 
@@ -1416,9 +1417,11 @@ void LoadCarcols() {
 		if (section == "col") {
 			int r, g, b;
 			if (sscanf(line.c_str(), "%d %d %d", &r, &g, &b) == 3) gCarPalette.push_back({(rw::uint8)r, (rw::uint8)g, (rw::uint8)b, 255});
-		} else if ((section == "car" || section == "car4") && !gCarPairs.count(w)) {
+		} else if (section == "car" || section == "car4") {
 			int n[4] = {0, 0, 0, 0};
 			int cnt = sscanf(line.c_str() + line.find(a) + strlen(a), "%d %d %d %d", &n[0], &n[1], &n[2], &n[3]);
+			if (cnt >= 2) gCarAllPairs[w].push_back({n[0], n[1]});
+			if (gCarPairs.count(w)) continue;
 			if (cnt >= 2) gCarPairs[w] = {n[0], n[1], cnt > 2 ? n[2] : 0, cnt > 3 ? n[3] : 0};
 		}
 	}
@@ -2125,7 +2128,17 @@ void UpdateTraffic(float dt) {
 	for (const CarGen &o : gCarGens) if (o.clump) { float ox = o.pos.x - n.x, oy = o.pos.y - n.y; if (ox * ox + oy * oy < 5.0f * 5.0f) return; }
 	int model = PickRandomGeneratorModel(hour, false);
 	if (model < 0) return;
-	VehProto *vp = GetVehicleProto(model, -1, -1);
+	// colours: a random primary / secondary pair from the model's carcols.dat list (the original picks one in CVehicleModelInfo::ChooseVehicleColour). DEVIATION: markers 2 / 3 (extra colours of car4 lines) keep the first pair's values.
+	int c1 = -1, c2 = -1;
+	if (const sa::VehicleDef *vd = gW.ide.FindVehicle(model)) {
+		auto pr = gCarAllPairs.find(Lower(vd->model));
+		if (pr != gCarAllPairs.end() && !pr->second.empty()) {
+			gPickRng = gPickRng * 1664525u + 1013904223u;
+			const auto &pc = pr->second[(gPickRng >> 8) % pr->second.size()];
+			c1 = pc.first; c2 = pc.second;
+		}
+	}
+	VehProto *vp = GetVehicleProto(model, c1, c2);
 	if (!vp) return;
 	TrafficCar c;
 	c.vp = vp; c.model = model; c.cur = c.prev = n.a;
