@@ -1401,7 +1401,11 @@ void DrawWater() {
 			for (float *a : {&acc0U, &acc0V, &acc1U, &acc1V}) if (*a > 1.0f) *a -= 1.0f;
 		}
 		unsigned tms = (unsigned)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
-		const float kWaterK = 0.0f;
+		// K = CWeather::Wavyness (0xC812E8, set at 0x72C659): min(min(Wind,1) + 0.3, 1), Wind = lerp of the exe table at 0x8D5E50 (read) between old and new weather
+		static const float kWindForWeather[23] = {0, 0.25f, 0, 0.2f, 0.7f, 0.25f, 0, 0.7f, 1.0f, 0, 0.2f, 0, 0.4f, 0, 0.3f, 0.7f, 1.0f, 0, 0.3f, 1.5f, 0, 0, 0};
+		float wf = gWeatherForced ? 1.0f : std::fmod(gGameMinutes, 60.0f) / 60.0f;
+		float wind = kWindForWeather[gOldWeather % 23] + (kWindForWeather[gWeather % 23] - kWindForWeather[gOldWeather % 23]) * wf;
+		const float kWaterK = std::min(std::min(wind, 1.0f) + 0.3f, 1.0f);
 		float shiftU, shiftV;
 		if (layer == 0) {
 			shiftU = acc0U; shiftV = std::cos((float)(tms & 0x1FFF) * 0.0007669904f) * 0.024f + acc0V;
