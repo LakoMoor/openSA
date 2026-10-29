@@ -654,7 +654,7 @@ bool PushOutSphere(rw::V3d &c, float r, std::vector<Contact> *out = nullptr) {
 // the feet (box min z = -1.0). In walk mode camPos IS the ped origin (the camera itself is the third-person follow camera).
 void CollideWalker() {
 	// CPhysical::ProcessShiftSectorList (0x546670, as reversed in gta-reversed): sum the contact normals of all three spheres, track the deepest contact, clamp the
-	// sum to unit length, then move the ped by shift * (1.5 * depth) (+ the 0.3 / 0.005 terms of the reference); one pass per frame. For a ped on the ground the
+	// sum to unit length, then move the ped by shift * clamp(1.5 * depth, 0.005, 0.3) (exe-verified formula); one pass per frame. For a ped on the ground the
 	// contact normal first has its xy part normalised and is renormalised (CPed::ProcessEntityCollision 0x5E2530, second contact loop).
 	// DEVIATIONS: only the horizontal part of the shift is applied (height comes from my ground line), the 0x5E2530 special case for near-vertical-down floor
 	// normals is skipped, vehicles/peds/objects are not contact sources, and the original's follow-up ProcessCollisionSectorList check is not done.
@@ -687,11 +687,11 @@ void CollideWalker() {
 	float mag = std::sqrt(shift.x * shift.x + shift.y * shift.y + shift.z * shift.z);
 	if (mag > 1.0f) { shift.x /= mag; shift.y /= mag; shift.z /= mag; }
 	float dx, dy;
+	// 0x546A62..0x546BC6 (read in the exe; the gta-reversed transcript differs): shift.z < -0.5 -> shift * depth * 0.75; ped -> shift * clamp(1.5 * depth, 0.005, 0.3);
+	// others -> shift * depth * 1.5 (constants 0x8CD7D0..D8, 0x858B4C, 0x858C24, 0x858F40 read).
 	if (shift.z >= -0.5f) {
-		float dm = 1.5f * maxDepth;
-		dx = shift.x * dm; dy = shift.y * dm;
-		if (dm >= 0.005f) { if (dm > 0.3f) { dx += shift.x * maxDepth * 0.3f; dy += shift.y * maxDepth * 0.3f; } }
-		else { dx += shift.x * maxDepth * 0.005f; dy += shift.y * maxDepth * 0.005f; }
+		float m = std::min(std::max(1.5f * maxDepth, 0.005f), 0.3f);
+		dx = shift.x * m; dy = shift.y * m;
 	} else {
 		dx = shift.x * maxDepth * 0.75f; dy = shift.y * maxDepth * 0.75f;
 	}
