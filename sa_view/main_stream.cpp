@@ -1419,6 +1419,7 @@ VehProto *GetVehicleProto(int id, int c1 = -1, int c2 = -1) {
 			if (!m.empty()) { vp.col = std::move(m.begin()->second); vp.hasCol = true; }
 			break;
 		}
+	if (getenv("SA_COLDEBUG2") && vp.hasCol) { float lo=1e9f,hi=-1e9f; for (auto &sp : vp.col.spheres) { lo=std::min(lo,sp.center[1]-sp.radius); hi=std::max(hi,sp.center[1]+sp.radius); } fprintf(gLog, "veh col sphere y range %.2f..%.2f bound r %.2f c %.2f %.2f %.2f\n", lo, hi, vp.col.bound.radius, vp.col.bound.center[0], vp.col.bound.center[1], vp.col.bound.center[2]); for (auto &sp : vp.col.spheres) fprintf(gLog, "  sph %.2f %.2f %.2f r %.2f\n", sp.center[0], sp.center[1], sp.center[2], sp.radius); }
 	vp.clump = c;
 	vp.minZ = minZ < 1e8f ? minZ : -0.5f;
 	fprintf(gLog, "vehicle %s loaded (min z %.2f, col %s: %zu tris %zu boxes %zu spheres)\n", name.c_str(), vp.minZ, vp.hasCol ? "ok" : "none", vp.col.tris.size(), vp.col.boxes.size(), vp.col.spheres.size());

@@ -67,7 +67,7 @@ size_t ParseColModels(const uint8_t *data, size_t size, std::unordered_map<std::
 				for (int i = 0; i < nSph; i++) {
 					float f[4];
 					memcpy(f, h + 4 + offSph + i * 20, 16);
-					m.spheres.push_back({{f[1], f[2], f[3]}, f[0]});
+					m.spheres.push_back({{f[0], f[1], f[2]}, f[3]}); // COL sphere: center xyz, radius, surface (20 bytes)
 				}
 			}
 			if (nBox && offBox && inRange(offBox, (size_t)nBox * 28)) {
