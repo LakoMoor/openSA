@@ -692,7 +692,7 @@ bool gWalk = false, gGrounded = true, gSwimming = false;
 float gVelZ = 0.0f, gAirVx = 0.0f, gAirVy = 0.0f;
 
 void UpdateWalk(float dt) {
-	constexpr float kOriginAboveFeet = 1.0f, kGravity = 20.0f, kStep = 1.0f, kMaxDrop = 60.0f; // 1.0 verified (ped box min z), 20 = 0.008 @0x863984
+	constexpr float kOriginAboveFeet = 1.0f, kGravity = 20.0f, kStep = 1.0f, kMaxDrop = 60.0f; // origin height 1.0 verified (ped box min z), 20 = 0.008 @0x863984. DEVIATION: kStep (max instant step-up, 1.0 m) and kMaxDrop are guesses, SA has no such snap (ground contact via CPhysical sphere/line tests)
 	float gz;
 	bool ground = GroundHeight(camPos.x, camPos.y, camPos.z - kOriginAboveFeet + kStep, kMaxDrop, gz);
 	// Swimming. Entry rule from CPed::ProcessBuoyancy (0x5E1FA0) + cBuoyancy::ProcessBuoyancy: immersion = clamp((waterLevel - z + 1) / 1.9),
