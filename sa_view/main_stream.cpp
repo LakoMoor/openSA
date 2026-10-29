@@ -843,7 +843,12 @@ void UpdateStreaming(double now) {
 // The ped is one or more skinned clumps that share the same animation (CJ: one per body part, each with its own copy of the skeleton).
 struct PedPart { rw::Clump *clump = nil; rw::HAnimHierarchy *hier = nil; };
 std::vector<PedPart> gPedParts;
-constexpr float kPedFollowDist = 4.0f, kPedFollowUp = 0.6f; // up = table f0 at 0x8CC548 (exe-verified look-at height above the ped origin); dist = ASSUMED: the exe gives min(2.0 + zoom, 4.0) with the default zoom unknown (0xB6F0FC), 4.0 is only the cap
+constexpr float kPedFollowDist = 4.0f, kPedFollowUp = 0.6f; // up = table f0 at 0x8CC548 (exe-verified look-at height above the ped origin); kPedFollowDist = table f4 cap
+// Zoom (0x528F8B..0x529130, read in the exe): the target is CCam +0x258 for m_nPedZoom 2 (default; +0x250 for 1, +0x254 otherwise), initialised at 0x5BC5BB to
+// -0.55 / 1.5 / 3.6; m_fPedZoomSmoothed (0xB6F0FC) starts at 0 and moves toward it by 0.12 * timeStep per tick. Distance = min(2.0 (table f1) + zoomSmoothed, f4 = 4.0).
+// ASSUMED: m_nPedZoom = 2 at start (gta-reversed CCamera init; its runtime-set value in the exe was not read), no zoom change keys.
+constexpr float kPedZoomTarget = 3.6f;
+float gPedZoomSmoothed = 0.0f;
 
 // ped.ifp animation on the ped's hierarchy. Rotation keys replace the bone's local rotation, translation keys (root only) its position.
 // Key quaternions are used as stored (checked visually: conjugating them lays the ped on its side). ASSUMED: bones without a translation
@@ -1056,7 +1061,13 @@ void UpdateCamera() {
 	if (gWalk && !gPedParts.empty()) { // third-person: back off along the view direction, stopping short of geometry in between
 		rw::V3d back = {-dir.x, -dir.y, -dir.z};
 		rw::V3d pivot = {camPos.x, camPos.y, camPos.z + kPedFollowUp};
-		float dist = kPedFollowDist, hit = RayCastWorld(pivot, back, kPedFollowDist + 0.3f);
+		static auto lastZ = std::chrono::steady_clock::now();
+		auto nowZ = std::chrono::steady_clock::now();
+		float zdt = std::min(std::chrono::duration<float>(nowZ - lastZ).count(), 0.1f);
+		lastZ = nowZ;
+		gPedZoomSmoothed = std::min(gPedZoomSmoothed + 0.12f * zdt * 50.0f, kPedZoomTarget);
+		float want = std::min(2.0f + gPedZoomSmoothed, kPedFollowDist);
+		float dist = want, hit = RayCastWorld(pivot, back, want + 0.3f);
 		if (hit >= 0.0f) dist = std::max(0.3f, hit - 0.3f);
 		static int logged = 0;
 		if (logged++ % 120 == 0) fprintf(gLog, "follow camera: ray hit %.2f -> distance %.2f, down %.2f, forward %.2f\n", hit, dist, RayCastWorld(pivot, {0, 0, -1}, 20.0f), RayCastWorld(pivot, dir, 20.0f));
