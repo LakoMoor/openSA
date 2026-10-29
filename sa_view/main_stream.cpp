@@ -1905,37 +1905,92 @@ void DriveUpdate(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 
 ScriptVM gVM;
 PopCycle gPop;
-uint32_t gPickRng = 0x1234567;
-
-// Random generator model. Original: CCarGenerator picks from CPopulation::m_AppropriateLoadedCars (cars streamed for the player's zone) via
-// CLoadedCarGroup::PickRandomCar(true, true): weighted by IDE frequency, normal/poor/rich/motorbike classes only, at most 2 live instances.
-// DEVIATION: no car streaming here, so the candidates are the cargrp.dat group chosen from the player zone's popcycle row; the bounding-length (<= 8 m) check is skipped; the live-instance limit (<= 2) counts only the parked and ambient-traffic cars this viewer shows.
+// Car model streaming, CStreaming::StreamOneNewCar / StreamVehiclesAndPeds_Always / ReclassifyLoadedCars: models are requested from a cargrp.dat group chosen from the
+// player zone's popcycle row (CCarCtrl::ChooseCarModelToLoad: 16 tries for a model that is not loaded yet), every 64 frames while fewer than 3 loaded cars suit the zone
+// and every 350 frames while at most 22 (desiredNumVehiclesLoaded) are loaded. "Appropriate" = member of a car group with a non-zero share in the current popcycle row
+// (CStreaming::IsCarModelNeededInCurrentZone; the gang-strength check is not ported).
+// DEVIATIONS: no real loading (the viewer loads a model's files when a car is built), when the pool is full the oldest non-appropriate model (else the oldest) is dropped instead of
+// RemoveLeastUsedModel, taxi/cabbie, boats and cheat groups are skipped, the pool is pre-filled with 8 cars at the first zone lookup (the original fills it during the loading screen),
+// no driver/passenger ped models are requested.
 int TrafficModelCount(int model); // live ambient traffic cars of a model (defined with the traffic code)
+uint32_t gPickRng = 0x1234567;
+std::vector<int> gLoadedCars;
+int gCarStreamFrame = 0, gCarStreamDelay = 0, gCarStreamZoneType = -2;
 
-int PickRandomGeneratorModel(float hour, bool weekend) {
+int CurrentZonePopType() {
 	const Zone *z = ZoneAt(camPos.x, camPos.y, camPos.z);
 	if (!z) return -1;
 	std::string up = z->name;
 	for (char &c : up) c = (char)toupper((unsigned char)c);
 	auto it = gVM.zonePopType.find(up);
-	int type = it != gVM.zonePopType.end() ? it->second : 4; // RESIDENTIAL_AVERAGE default of CZoneInfo
-	auto rnd = [&]() { gPickRng = gPickRng * 1664525u + 1013904223u; return ((gPickRng >> 8) & 0xffff) / 65536.0f; };
-	for (int tries = 0; tries < 10; tries++) {
-		int grp = gPop.pickGroup(type, (int)hour, weekend, rnd());
-		if (grp < 0 || grp >= (int)gPop.carGroups.size()) continue;
-		struct C { int id, frq; };
-		std::vector<C> cand;
-		int sum = 0;
-		for (const std::string &n : gPop.carGroups[grp]) {
+	return it != gVM.zonePopType.end() ? it->second : 4; // RESIDENTIAL_AVERAGE default of CZoneInfo
+}
+float PickRnd() { gPickRng = gPickRng * 1664525u + 1013904223u; return ((gPickRng >> 8) & 0xffff) / 65536.0f; }
+bool CarModelNeededInZone(int model, int type, int hour, bool weekend) {
+	if (type < 0 || type >= (int)gPop.types.size()) return false;
+	const PopCycleRow &r = gPop.types[type].rows[weekend ? 1 : 0][(hour / 2) % 12];
+	for (size_t g = 0; g < r.group.size() && g < gPop.carGroups.size(); g++) {
+		if (r.group[g] <= 0) continue;
+		for (const std::string &n : gPop.carGroups[g]) {
 			const sa::VehicleDef *vd = gW.ide.FindVehicleByModelName(n);
-			if (!vd) continue;
-			if (vd->vclass != "normal" && vd->vclass != "poorfamily" && vd->vclass != "richfamily" && vd->vclass != "motorbike") continue;
-			cand.push_back({vd->id, vd->frequency}); sum += vd->frequency;
+			if (vd && vd->id == model) return true;
 		}
-		if (cand.empty() || sum <= 0) continue;
-		int w = (int)(rnd() * sum), pick = cand.back().id;
+	}
+	return false;
+}
+void StreamOneNewCar(int type, int hour, bool weekend) {
+	int grp = gPop.pickGroup(type, hour, weekend, PickRnd());
+	if (grp < 0 || grp >= (int)gPop.carGroups.size() || gPop.carGroups[grp].empty()) return;
+	const std::vector<std::string> &names = gPop.carGroups[grp];
+	for (int tries = 0; tries < 16; tries++) {
+		const sa::VehicleDef *vd = gW.ide.FindVehicleByModelName(names[(size_t)(PickRnd() * names.size()) % names.size()]);
+		if (!vd || std::find(gLoadedCars.begin(), gLoadedCars.end(), vd->id) != gLoadedCars.end()) continue;
+		if (gLoadedCars.size() >= 22) {
+			size_t victim = 0;
+			for (size_t k = 0; k < gLoadedCars.size(); k++) if (!CarModelNeededInZone(gLoadedCars[k], type, hour, weekend)) { victim = k; break; }
+			gLoadedCars.erase(gLoadedCars.begin() + victim);
+		}
+		gLoadedCars.push_back(vd->id);
+		fprintf(gLog, "car streaming: loaded model %d (%s), %d loaded\n", vd->id, vd->model.c_str(), (int)gLoadedCars.size());
+		return;
+	}
+}
+void UpdateCarStreaming(float hour, bool weekend) {
+	int type = CurrentZonePopType();
+	if (type < 0) return;
+	int h = (int)hour;
+	if (gCarStreamZoneType == -2) for (int k = 0; k < 8; k++) StreamOneNewCar(type, h, weekend);
+	gCarStreamZoneType = type;
+	gCarStreamFrame++;
+	if (gCarStreamFrame % 64 == 0) {
+		int appropriate = 0;
+		for (int m : gLoadedCars) if (CarModelNeededInZone(m, type, h, weekend)) appropriate++;
+		if (appropriate < 3) StreamOneNewCar(type, h, weekend);
+	}
+	if (gCarStreamDelay >= 0) gCarStreamDelay--;
+	else if (gLoadedCars.size() <= 22) { StreamOneNewCar(type, h, weekend); gCarStreamDelay = 350; }
+}
+
+// Random generator model: CCarGenerator picks from CPopulation::m_AppropriateLoadedCars via CLoadedCarGroup::PickRandomCar(true, true): weighted by IDE
+// frequency, normal/poor/rich/motorbike classes only, at most 2 live instances (up to 10 tries). DEVIATION: the bounding-length (<= 8 m) check is skipped; the
+// live-instance limit counts only the parked and ambient-traffic cars this viewer shows; no script suppression / blocking.
+int PickRandomGeneratorModel(float hour, bool weekend) {
+	int type = CurrentZonePopType();
+	if (type < 0) return -1;
+	struct C { int id, frq; };
+	std::vector<C> cand;
+	int sum = 0;
+	for (int m : gLoadedCars) {
+		if (!CarModelNeededInZone(m, type, (int)hour, weekend)) continue;
+		const sa::VehicleDef *vd = gW.ide.FindVehicle(m);
+		if (!vd) continue;
+		if (vd->vclass != "normal" && vd->vclass != "poorfamily" && vd->vclass != "richfamily" && vd->vclass != "motorbike") continue;
+		cand.push_back({vd->id, vd->frequency}); sum += vd->frequency;
+	}
+	if (cand.empty() || sum <= 0) return -1;
+	for (int tries = 0; tries < 10; tries++) {
+		int w = (int)(PickRnd() * sum), pick = cand.back().id;
 		for (const C &c : cand) { if (c.frq >= w) { pick = c.id; break; } w -= c.frq; }
-		// CLoadedCarGroup::PickRandomCar(bNotTooManyInTheWorld): reject a model that already has more than 2 live instances (m_nRefCount <= 2); retried up to 10 times
 		int live = 0;
 		for (const CarGen &o : gCarGens) if (o.clump && o.model == pick) live++;
 		live += TrafficModelCount(pick);
@@ -1955,6 +2010,7 @@ void UpdateCars() {
 	float camVelX = camPos.x - prevCamX, camVelY = camPos.y - prevCamY;
 	prevCamX = camPos.x; prevCamY = camPos.y;
 	float hour = std::fmod(gGameMinutes, 1440.0f) / 60.0f;
+	UpdateCarStreaming(hour, false);
 	int parkedLimit = (hour >= 21.0f || hour < 7.0f) ? 10 : 5, parked = 0;
 	for (const CarGen &g : gCarGens) if (g.clump && !g.ignorePop) parked++;
 	static bool init = false;

@@ -18,6 +18,6 @@ Written down from the README status table and the project notes; it is the plan 
 | 9 | CJ clothes (`ConstructTextures`, clothes builder) | not started |
 | 10 | More script commands / missions (most commands are stubs) | partial |
 | 11 | Real vehicle physics (CAutomobile) | partial (suspension + tyre + transmission core ported from reVC/gta-reversed, flat-ground numbers sane; surface adhesion from surface.dat/surfinfo.dat done; static-world collision impulses done; no damage, no vehicle/ped/object collisions) |
-| 12 | Car streaming for generator models (`m_AppropriateLoadedCars`) | not started |
+| 12 | Car streaming for generator models (`m_AppropriateLoadedCars`) | partial (StreamOneNewCar / appropriate-zone logic ported from gta-reversed; pool of up to 22 model ids with the original 64/350-frame cadence, no real loading, no taxi/boats/cops/gang cars; run-tested via log) |
 
 Steps 5-12 are each a subsystem of weeks of work in the original; they are not expected to finish in a single session.
