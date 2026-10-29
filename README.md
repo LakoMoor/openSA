@@ -29,6 +29,7 @@ Early stage. This is a data and streaming layer plus viewers, not a playable gam
 | Zones: `info.zon` parsed (380 zones), the innermost box under the player is looked up and logged (PLS at Playa del Seville, matches the map); popcycle / car groups / random models not built on it yet | partial |
 | Script VM (main.scm): core commands, mission launch, zone population types; random-model car generators | started: zone pop type from main.scm and popcycle/cargrp pick the model (approximation of PickRandomCar, no car streaming); most game commands unhandled |
 | Driving a parked car (F, WASD, space) | PROTOTYPE: kinematic model from handling.cfg, no suspension/damage/enter animation; world collision = 5 pushed-out spheres; verified on screen |
+| Path nodes (`nodes0..63.dat`): 68237 nodes (30587 vehicle, 37650 ped) parsed, areaId matches file for all | node block done; links, intersections and routing not yet |
 | Vehicle reflections, vehicle physics (real), peds, traffic, audio | not started |
 
 The goal is behaviour identical to the original game. Facts read from the executable are marked as such in
