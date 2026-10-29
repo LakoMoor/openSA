@@ -1767,7 +1767,7 @@ void UpdateCars() {
 // ---- Ambient pedestrians ----
 // ORIGINAL: CPopulation::AddPed picks a ped group from the popcycle row (weekday/weekend, 2-hour slot) of the zone, a model from pedgrp.dat, and places it on a
 // ped path node (CPathFind::FindNextNodeWandering for the walk); animation and speed come from the ped's task system and anim group.
-// DEVIATIONS: pedgrp.dat variant is always the Los Santos one (first line of each group; SF / Vegas lines are ignored); weekday only; every ped plays walk_civi
+// DEVIATIONS: pedgrp.dat variant is always the Los Santos one (first line of each group; SF / Vegas lines are ignored); weekday only; every ped plays its animation group's walk cycle
 // (animation group of the model ignored) at the clip's average speed; no head turning / stopping / crossing logic; no collision with cars or other peds;
 // spawn ring (30..70 m) and despawn distance (110 m) are guesses, not read from the exe; the maximum is the popcycle maxPeds capped at 30.
 PathData gPaths;
@@ -1782,7 +1782,7 @@ struct AmbientPed {
 	float heading = 0.0f; // degrees, forward = (sin, cos) like camYaw
 	NodeAddr cur, prev, next;
 	int model = -1;
-	float stepTimer = 0.0f;
+	float stepTimer = 0.0f, speed = 1.5f;
 };
 std::vector<AmbientPed> gAmbientPeds;
 struct PedAssets { std::vector<uint8_t> dff; std::vector<rw::TexDictionary *> txds; };
@@ -1814,7 +1814,25 @@ void LoadPedGroups() {
 	fprintf(gLog, "pedgrp.dat: %zu groups\n", gPedGroups.size());
 }
 
+std::unordered_map<std::string, std::string> gWalkOfGroup; // animgrp.dat: group name -> first animation (the walk cycle)
+void LoadAnimGroups() {
+	std::ifstream f(gameDir + "/data/animgrp.dat");
+	std::string line, grp;
+	bool expectFirst = false;
+	auto lower = [](std::string x) { for (char &c : x) c = (char)tolower((unsigned char)c); return x; };
+	auto trim = [](std::string x) { size_t a = x.find_first_not_of(" 	"), b = x.find_last_not_of(" 	"); return a == std::string::npos ? std::string() : x.substr(a, b - a + 1); };
+	while (std::getline(f, line)) {
+		line = trim(line);
+		if (line.empty() || line[0] == '#') continue;
+		if (line == "end") { grp.clear(); expectFirst = false; continue; }
+		if (grp.empty()) { size_t c = line.find(','); if (c == std::string::npos) continue; grp = lower(trim(line.substr(0, c))); expectFirst = true; continue; }
+		if (expectFirst) { gWalkOfGroup[grp] = lower(line); expectFirst = false; }
+	}
+	fprintf(gLog, "animgrp.dat: %zu groups\n", gWalkOfGroup.size());
+}
+
 void InitPeds() {
+	LoadAnimGroups();
 	gPathsLoaded = gPaths.load(gameDir + "/data/Paths");
 	if (!gPathsLoaded) { fprintf(gLog, "path nodes failed to load\n"); return; }
 	LoadPedGroups();
@@ -1874,9 +1892,17 @@ bool SpawnAmbientPed(const PedNodeRef &n, int modelId) {
 	if (as.dff.size() < 2) return false;
 	AmbientPed p;
 	if (!AddPedPart(as.dff, as.txds, pd->model.c_str(), nullptr, p.parts)) return false;
-	auto it = gAnims.find("walk_civi");
+	// walk cycle of the model's animation group (peds.ide column -> animgrp.dat first animation); falls back to walk_civi when the clip is not in ped.ifp
+	std::string gname = pd->animGroup;
+	for (char &c : gname) c = (char)tolower((unsigned char)c);
+	auto wg = gWalkOfGroup.find(gname);
+	auto it = wg != gWalkOfGroup.end() ? gAnims.find(wg->second) : gAnims.end();
+	if (it == gAnims.end()) it = gAnims.find("walk_civi");
 	if (it == gAnims.end()) it = gAnims.find("walk_player");
 	if (it == gAnims.end()) { DestroyAmbient(p); return false; }
+	p.speed = ClipSpeed(it->first.c_str());
+	if (p.speed <= 0.1f) p.speed = ClipSpeed("walk_civi");
+	fprintf(gLog, "ped %s: group %s walk %s %.2f m/s\n", pd->model.c_str(), gname.c_str(), it->first.c_str(), p.speed);
 	gPickRng = gPickRng * 1664525u + 1013904223u;
 	p.clips.push_back({&it->second, ((gPickRng >> 8) & 0xffff) / 65536.0f * it->second.duration, 1.0f, 0.0f, true});
 	p.cur = n.a; p.prev = n.a; p.model = modelId;
@@ -1914,7 +1940,7 @@ void UpdateAmbientPeds(float dt) {
 		if (!gone) {
 			const PathNode &t = NodeOf(p.next);
 			float tx = t.x - p.pos.x, ty = t.y - p.pos.y, d = std::sqrt(tx * tx + ty * ty);
-			float step = speed * dt;
+			float step = p.speed * dt;
 			if (d <= step + 0.05f) {
 				p.prev = p.cur; p.cur = p.next;
 				if (!ChooseNextNode(p.cur, p.prev, p.next)) gone = true;
