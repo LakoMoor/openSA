@@ -682,9 +682,9 @@ void UpdateWalk(float dt) {
 	// 0.55 tread, 0.4 breast, 0.2 crawl, 0.65 surface test, 0.1 per tick clamp). DEVIATION: the 0.4/0.2 blends and the smoothing are not
 	// implemented (no clip blending), so moving also sits at the tread height.
 	float wl;
-	// without loaded ground below, only an already-near-the-surface ped counts as swimming (water polygons also cover coastal land)
+	// without ground collision below (open sea has none), a ped over water falls under gravity until the same rule above applies
 	bool inWater = WaterLevelAt(camPos.x, camPos.y, wl);
-	gSwimming = inWater && (ground ? (camPos.z < wl - 0.6f || (gSwimming && wl - gz > 1.55f)) : camPos.z <= wl + 2.0f);
+	gSwimming = inWater && (ground ? (camPos.z < wl - 0.6f || (gSwimming && wl - gz > 1.55f)) : camPos.z < wl - 0.6f);
 	if (gSwimming) {
 		float target = wl - 0.55f, dz = target - camPos.z, maxStep = 5.0f * dt;
 		camPos.z += std::max(-maxStep, std::min(maxStep, dz));
@@ -692,7 +692,11 @@ void UpdateWalk(float dt) {
 		gGrounded = false;
 		return;
 	}
-	if (!ground) { gVelZ = 0.0f; return; } // no collision loaded here (yet): hold the height
+	if (!ground) {
+		if (inWater) { gVelZ -= kGravity * dt; camPos.z += gVelZ * dt; gGrounded = false; } // open sea: nothing to stand on
+		else gVelZ = 0.0f; // no collision loaded here (yet): hold the height
+		return;
+	}
 	float floorZ = gz + kOriginAboveFeet;
 	gGrounded = camPos.z <= floorZ + 0.02f && gVelZ <= 0.0f;
 	if (!gGrounded) {
