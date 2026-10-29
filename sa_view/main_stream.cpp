@@ -914,10 +914,10 @@ float ClipSpeed(const char *name) {
 
 // Active clips, blended like CAnimManager::BlendAnimation: the selected clip fades in with delta kBlendDelta per second, every other clip
 // fades out by its own amount * kBlendDelta (at least 0.05) and is dropped at 0. UpdateBlend: amount += delta * ts (ts in seconds).
-// Deltas VERIFIED in CPed::SetMoveAnim (exe 0x5E4A00): move state STILL -> idle 4.0, WALK / RUN / SPRINT -> 1.0. ASSUMED 4.0 for jump and swim clips (their tasks not checked).
+// Deltas VERIFIED in CPed::SetMoveAnim (exe 0x5E4A00): move state STILL -> idle 4.0, WALK / RUN / SPRINT -> 1.0. Jump (read in the exe): launch 0x67D8FB and glide 0x679D35 blend 8.0, land (0x679200) 1000.0 = instant. ASSUMED 4.0 for swim clips (task not checked).
 struct ActiveClip { const sa::IfpAnim *anim; float time, amount, delta; bool loop; };
 std::vector<ActiveClip> gClips;
-constexpr float kBlendDelta = 4.0f, kMoveBlendDelta = 1.0f;
+constexpr float kBlendDelta = 4.0f, kMoveBlendDelta = 1.0f, kJumpBlendDelta = 8.0f, kLandBlendDelta = 1000.0f;
 
 void SelectPedAnim(const char *name, bool loop = true, float blend = kBlendDelta) {
 	auto it = gAnims.find(name);
@@ -944,8 +944,8 @@ void AnimatePed(float dt) {
 	if (gLandTimer > 0.0f) gLandTimer -= dt;
 	if (gLaunchTimer > 0.0f) gLaunchTimer -= dt;
 	if (gWalk && gSwimming) SelectPedAnim(!moving ? "swim_tread" : sk::keys[' '] ? "swim_crawl" : "swim_breast"); // Space = sprint -> crawl
-	else if (air) SelectPedAnim(gLaunchTimer > 0.0f ? "jump_launch" : "jump_glide", gLaunchTimer <= 0.0f);
-	else if (gLandTimer > 0.0f) SelectPedAnim("jump_land", false);
+	else if (air) SelectPedAnim(gLaunchTimer > 0.0f ? "jump_launch" : "jump_glide", gLaunchTimer <= 0.0f, kJumpBlendDelta);
+	else if (gLandTimer > 0.0f) SelectPedAnim("jump_land", false, kLandBlendDelta);
 	else SelectPedAnim(PedClip(moving), true, moving ? kMoveBlendDelta : kBlendDelta);
 	if (gPedParts.empty() || gClips.empty()) return;
 	for (size_t i = 0; i < gClips.size();) {
