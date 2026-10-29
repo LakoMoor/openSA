@@ -1692,7 +1692,9 @@ uint32_t gPickRng = 0x1234567;
 
 // Random generator model. Original: CCarGenerator picks from CPopulation::m_AppropriateLoadedCars (cars streamed for the player's zone) via
 // CLoadedCarGroup::PickRandomCar(true, true): weighted by IDE frequency, normal/poor/rich/motorbike classes only, at most 2 live instances.
-// DEVIATION: no car streaming here, so the candidates are the cargrp.dat group chosen from the player zone's popcycle row; the bounding-length (<= 8 m) check is skipped; the live-instance limit (<= 2) counts only cars this viewer shows.
+// DEVIATION: no car streaming here, so the candidates are the cargrp.dat group chosen from the player zone's popcycle row; the bounding-length (<= 8 m) check is skipped; the live-instance limit (<= 2) counts only the parked and ambient-traffic cars this viewer shows.
+int TrafficModelCount(int model); // live ambient traffic cars of a model (defined with the traffic code)
+
 int PickRandomGeneratorModel(float hour, bool weekend) {
 	const Zone *z = ZoneAt(camPos.x, camPos.y, camPos.z);
 	if (!z) return -1;
@@ -1719,6 +1721,7 @@ int PickRandomGeneratorModel(float hour, bool weekend) {
 		// CLoadedCarGroup::PickRandomCar(bNotTooManyInTheWorld): reject a model that already has more than 2 live instances (m_nRefCount <= 2); retried up to 10 times
 		int live = 0;
 		for (const CarGen &o : gCarGens) if (o.clump && o.model == pick) live++;
+		live += TrafficModelCount(pick);
 		if (live > 2) continue;
 		return pick;
 	}
@@ -2046,6 +2049,7 @@ struct TrafficCar {
 	int model = -1;
 };
 std::vector<TrafficCar> gTraffic;
+int TrafficModelCount(int model) { int n = 0; for (const TrafficCar &c : gTraffic) if (c.model == model) n++; return n; }
 std::unordered_map<int64_t, std::vector<PedNodeRef>> gCarNodeGrid;
 bool gCarNodesBuilt = false;
 
