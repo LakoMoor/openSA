@@ -26,6 +26,7 @@ bool LoadWaterDat(const std::string &path, std::vector<WaterPoly> &out) {
 			(void)used;
 			if (k < 7) break;
 			w.x[w.n] = v[0]; w.y[w.n] = v[1]; w.z[w.n] = v[2];
+			w.flowX[w.n] = v[3]; w.flowY[w.n] = v[4];
 			w.bigWaves[w.n] = v[5]; w.smallWaves[w.n] = v[6];
 			w.n++;
 			p = q;

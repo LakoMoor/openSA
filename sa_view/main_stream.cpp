@@ -1274,11 +1274,41 @@ void DrawWater() {
 	for (int layer = 0; layer < 2; layer++) {
 		const float scale = layer == 0 ? 25.0f : 12.5f;
 		const rw::uint8 alpha = layer == 0 ? 160 : 90;
-		// UV shift (RenderWater 0x6EF673): layer 0 V = cos((t & 0x1FFF) * 0.00076699) * 0.024 + accumulator; the accumulators and layer 1's term scale with
-		// the water wind (0xC22890/94) and 0xC812E8, treated as 0 here. DEVIATION: t is wall-clock ms instead of the game timer, wind is assumed calm.
+		// UV shift (RenderWater 0x6EF673): layer 0 U = acc0U, V = cos((t & 0x1FFF) * 0.00076699) * 0.024 + acc0V; layer 1 U = sin((t & 0xFFF) * 0.0015339808) * K * 0.08
+		// + acc1U, V = cos(..) * K * 0.08 + acc1V. The accumulators advance per tick by wind * 0.04 * (0.04 / 0.08 for layer 0 / 1) and wrap at 1; wind chases the
+		// flow of the water vertex nearest the camera (0x6E9D75, int8 flow / 64) at 0.001 per tick. DEVIATION: K (0xC812E8, runtime-set, 0 in the file) is taken as 0,
+		// the nearest-flow search is simplified to the nearest vertex, t is wall-clock ms instead of the game timer.
 		static const auto t0 = std::chrono::steady_clock::now();
+		static float windX = 0, windY = 0, acc0U = 0, acc0V = 0, acc1U = 0, acc1V = 0;
+		static std::chrono::steady_clock::time_point last = t0;
+		if (layer == 0) {
+			auto now = std::chrono::steady_clock::now();
+			float ts = std::min(std::chrono::duration<float>(now - last).count(), 0.1f) * 50.0f; // game ticks (1 tick = 20 ms)
+			last = now;
+			float tx = 0, ty = 0, best = 1e30f;
+			for (const sa::WaterPoly &w : gWater)
+				for (int i = 0; i < w.n; i++) {
+					float d2 = (w.x[i] - camPos.x) * (w.x[i] - camPos.x) + (w.y[i] - camPos.y) * (w.y[i] - camPos.y);
+					if (d2 < best) { best = d2; tx = std::trunc(w.flowX[i] * 64.0f) / 64.0f; ty = std::trunc(w.flowY[i] * 64.0f) / 64.0f; }
+				}
+			auto chase = [&](float &cur, float target) {
+				float step = ts * 0.001f, d = target - cur;
+				cur = step <= std::fabs(d) ? cur + (d >= 0 ? step : -step) : target;
+			};
+			chase(windX, tx); chase(windY, ty);
+			float fx = ts * windX * 0.04f, fy = ts * windY * 0.04f;
+			acc1U += fx * 0.08f; acc1V += fy * 0.08f; acc0U += fx * 0.04f; acc0V += fy * 0.04f;
+			for (float *a : {&acc0U, &acc0V, &acc1U, &acc1V}) if (*a > 1.0f) *a -= 1.0f;
+		}
 		unsigned tms = (unsigned)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
-		float shiftU = 0.0f, shiftV = layer == 0 ? std::cos((float)(tms & 0x1FFF) * 0.0007669904f) * 0.024f : 0.0f;
+		const float kWaterK = 0.0f;
+		float shiftU, shiftV;
+		if (layer == 0) {
+			shiftU = acc0U; shiftV = std::cos((float)(tms & 0x1FFF) * 0.0007669904f) * 0.024f + acc0V;
+		} else {
+			float a = (float)(tms & 0xFFF) * 0.0015339808f;
+			shiftU = std::sin(a) * kWaterK * 0.08f + acc1U; shiftV = std::cos(a) * kWaterK * 0.08f + acc1V;
+		}
 		std::vector<rw::RWDEVICE::Im3DVertex> verts;
 		std::vector<rw::uint16> idx;
 		for (const sa::WaterPoly &w : gWater) {

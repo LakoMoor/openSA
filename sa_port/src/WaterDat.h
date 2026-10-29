@@ -10,6 +10,7 @@ struct WaterPoly {
 	int n = 0; // 3 or 4
 	float x[4] = {}, y[4] = {}, z[4] = {};
 	float bigWaves[4] = {}, smallWaves[4] = {};
+	float flowX[4] = {}, flowY[4] = {}; // stored by the game as int8(flow * 64)
 	int flags = 0;
 };
 
