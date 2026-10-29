@@ -1822,6 +1822,18 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 				float imp = -(1.0f + 0.05f) * sp * gPhys.massAt(pt, n);
 				vp::V3 f = n * imp;
 				gPhys.applyMoveForce(f); gPhys.applyTurnForce(f, pt);
+				// CAutomobile::VehicleDamage health loss (0x6A8052): (impulse - mass/1500*25) * damageMult * 0.6 * collForceMult, /2 for the player vehicle. ASSUMED: impulse == m_fDamageIntensity,
+				// collForceMult 1/3 (default), damageMult scaled by 2000/mass as ConvertDataToGameUnits does. Health starts at 1000, only logged / no visual damage, no explosion.
+				if (gDriveHandling) {
+					float minDmg = gDriveHandling->mass / 1500.0f * 25.0f;
+					if (imp > minDmg) {
+						float dm = gDriveHandling->damageMult * 2000.0f / gDriveHandling->mass;
+						float loss = (imp - minDmg) * dm * 0.6f * (1.0f / 3.0f) / 2.0f;
+						static float health = 1000.0f;
+						health -= loss;
+						fprintf(gLog, "car damage: impulse %.1f loss %.1f health %.1f\n", imp, loss, health);
+					}
+				}
 			}
 		}
 	}
@@ -3164,6 +3176,7 @@ void Idle(float dt) {
 			int best = -1; float bd = getenv("SA_AUTODRIVE") ? 25600.0f : 25.0f;
 			for (size_t i = 0; i < gCarGens.size(); i++) {
 				if (!gCarGens[i].clump) continue;
+				if (getenv("SA_AUTODRIVE")) { const sa::VehicleDef *vd = gW.ide.FindVehicle(gCarGens[i].model); if (!vd || vd->type != "car") continue; } // test aid: four-wheeled cars only
 				float dx = gCarGens[i].pos.x - camPos.x, dy = gCarGens[i].pos.y - camPos.y, d2 = dx * dx + dy * dy;
 				if (d2 < bd) { bd = d2; best = (int)i; }
 			}
