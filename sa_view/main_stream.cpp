@@ -1616,6 +1616,7 @@ const Zone *ZoneAt(float x, float y, float z) {
 const char *ZoneNameAt(float x, float y, float z) { const Zone *q = ZoneAt(x, y, z); return q ? q->name.c_str() : "-"; }
 
 HandlingCfg gHandling;
+float gCarPitch = 0.0f, gCarRoll = 0.0f; // radians, terrain attitude of the driven car
 float gCarHeading = 0.0f, gCarSpeed = 0.0f; // radians (counter-clockwise, like the generator angle), m/s along the car's forward axis
 const HandlingData *gDriveHandling = nullptr;
 
@@ -1668,11 +1669,23 @@ void DriveUpdate(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 	}
 	float gz;
 	if (GroundHeight(g.pos.x, g.pos.y, g.pos.z + 3.0f, 10.0f, gz)) g.pos.z = gz - (vp ? vp->minZ : 0.0f);
+	// Body attitude follows the terrain: ground sampled under the front / rear axle (+-1.4 m) and the left / right sides (+-0.8 m), pitch and roll smoothed.
+	// DEVIATION: the original gets attitude from the four wheel suspension contacts of CAutomobile physics; this is a geometric stand-in (the car body is not lifted, no springs).
+	{
+		float fx = -std::sin(gCarHeading), fy = std::cos(gCarHeading), rx = std::cos(gCarHeading), ry = std::sin(gCarHeading), zf, zr, zR, zL, z0 = gz + 1.0f;
+		bool ok = GroundHeight(g.pos.x + fx * 1.4f, g.pos.y + fy * 1.4f, z0 + 2.0f, 6.0f, zf) && GroundHeight(g.pos.x - fx * 1.4f, g.pos.y - fy * 1.4f, z0 + 2.0f, 6.0f, zr) &&
+		          GroundHeight(g.pos.x + rx * 0.8f, g.pos.y + ry * 0.8f, z0 + 2.0f, 6.0f, zR) && GroundHeight(g.pos.x - rx * 0.8f, g.pos.y - ry * 0.8f, z0 + 2.0f, 6.0f, zL);
+		float wantPitch = ok ? std::atan2(zf - zr, 2.8f) : 0.0f, wantRoll = ok ? -std::atan2(zR - zL, 1.6f) : 0.0f, k = std::min(1.0f, 8.0f * dt);
+		gCarPitch += (wantPitch - gCarPitch) * k;
+		gCarRoll += (wantRoll - gCarRoll) * k;
+	}
 	gInsts[g.inst].col = ownCol;
 	if (g.clump) {
-		rw::V3d zax = {0, 0, 1};
+		rw::V3d zax = {0, 0, 1}, xax = {1, 0, 0}, yax = {0, 1, 0};
 		rw::Frame *f = g.clump->getFrame();
-		f->rotate(&zax, gCarHeading * 57.29578f, rw::COMBINEREPLACE);
+		f->rotate(&yax, gCarRoll * 57.29578f, rw::COMBINEREPLACE);
+		f->rotate(&xax, gCarPitch * 57.29578f, rw::COMBINEPOSTCONCAT);
+		f->rotate(&zax, gCarHeading * 57.29578f, rw::COMBINEPOSTCONCAT);
 		rw::V3d p = g.pos;
 		f->translate(&p, rw::COMBINEPOSTCONCAT);
 		Inst &pi = gInsts[g.inst];
