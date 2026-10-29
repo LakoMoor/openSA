@@ -1315,10 +1315,11 @@ rw::Frame *FindNamedFrame(rw::Frame *root, const char *name) {
 	return nil;
 }
 
-VehProto *GetVehicleProto(int id) {
-	auto it = gVehProtos.find(id);
+VehProto *GetVehicleProto(int id, int c1 = -1, int c2 = -1) {
+	int key = id * 65536 + ((c1 & 255) << 8) + (c2 & 255);
+	auto it = gVehProtos.find(key);
 	if (it != gVehProtos.end()) return it->second.clump ? &it->second : nullptr;
-	VehProto &vp = gVehProtos[id];
+	VehProto &vp = gVehProtos[key];
 	const sa::VehicleDef *v = gW.ide.FindVehicle(id);
 	if (!v) return nullptr;
 	const sa::ImgV2 &gta3 = gW.archives[0];
@@ -1355,6 +1356,8 @@ VehProto *GetVehicleProto(int id) {
 	auto pr = gCarPairs.find(name);
 	for (int i = 0; i < 4; i++) {
 		int idx = pr != gCarPairs.end() ? pr->second[i] : 0;
+		if (c1 >= 0 && i == 0) idx = c1; // generator colours (primary -> marker 0, secondary -> marker 1); -1 = random in the original, pair 0 here
+		if (c2 >= 0 && i == 1) idx = c2;
 		cols[i] = idx < (int)gCarPalette.size() ? gCarPalette[idx] : rw::RGBA{128, 128, 128, 255};
 	}
 	FORLIST(lnk, c->atomics) {
@@ -1435,7 +1438,7 @@ void UpdateCars() {
 		if (g.clump && d2 > (kCarSpawnRange + 50.0f) * (kCarSpawnRange + 50.0f)) { gWorld->removeClump(g.clump); g.clump->destroy(); g.clump = nil; g.tried = false; gInsts[g.inst].col = nil; continue; }
 		if (d2 >= kCarSpawnRange * kCarSpawnRange || g.clump || g.tried) continue;
 		if (!g.ignorePop && parked >= parkedLimit) continue;
-		VehProto *vp = GetVehicleProto(g.model);
+		VehProto *vp = GetVehicleProto(g.model, g.c1, g.c2);
 		if (!vp) { g.tried = true; continue; }
 		float gz;
 		if (!GroundHeight(g.pos.x, g.pos.y, g.pos.z + 3.0f, 10.0f, gz)) continue; // no collision loaded here yet: retry next frame
