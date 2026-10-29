@@ -1695,7 +1695,7 @@ HandlingCfg gHandling;
 // (engineAccel * 0.14 m/s^2) and the 2.8 m wheelbase are fitted guesses, not read from the exe.
 // Rigid-body driving (default; SA_KINEMATIC=1 selects the old kinematic prototype): VehiclePhysics.cpp, a port of CPhysical / CAutomobile suspension / CVehicle::ProcessWheel /
 // cTransmission. Wheel positions come from the model's wheel dummies, wheel size from vehicles.ide. DEVIATIONS: wheel rays are vertical probes against the COL ground
-// (not lines along the suspension axis against all geometry), the ground normal comes from 3 samples, tyre adhesion from surface.dat/surfinfo.dat assuming row index = COL surface id (no wet multiplier / TYRE_GRIP), world collision is the old 5-sphere push-out with a speed loss (no CPhysical::ProcessCollision impulses), steering input smoothing 0.1 / tick is assumed,
+// (not lines along the suspension axis against all geometry), the ground normal comes from 3 samples, tyre adhesion from surface.dat/surfinfo.dat assuming row index = COL surface id (no wet multiplier / TYRE_GRIP), world collision is the old 5-sphere push-out plus the static-B impulse of CPhysical::ApplyCollision (elasticity 0.05 ASSUMED, no damage, no vehicle-vs-vehicle), steering input smoothing 0.1 / tick is assumed,
 // no wheel rotation / steering visuals, no damage.
 // Tyre adhesion by surface: data/surface.dat (lower-triangle matrix of adhesion groups) + data/surfinfo.dat (group per surface). SurfaceInfos_c::GetAdhesiveLimit
 // = limits[ground group][RUBBER] for a wheel. ASSUMPTION: the surfinfo.dat row index is the COL surface id.
@@ -1794,15 +1794,27 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 		return true;
 	};
 	gPhys.step(dt * 50.0f, in, ground);
-	// world collision as in the kinematic prototype: five spheres along the car axis pushed out of static geometry
+	// world collision: five spheres along the car axis; wall contacts push the body out and apply the static-B branch of CPhysical::ApplyCollision (reVC):
+	// j = -(1+e) * (v_point . n) * GetMass(point, n), move + turn force along n (z scaled 0.3 for non-flat normals)
 	{
-		float moved = 0.0f;
 		for (int k = -2; k <= 2; k++) {
 			rw::V3d c = {gPhys.pos.x + gPhys.fwd.x * 0.9f * k, gPhys.pos.y + gPhys.fwd.y * 0.9f * k, gPhys.pos.z + gPhys.up.z * 0.9f + 0.3f};
-			rw::V3d c0 = c;
-			if (PushOutSphere(c, 0.9f)) { gPhys.pos.x += c.x - c0.x; gPhys.pos.y += c.y - c0.y; moved += std::fabs(c.x - c0.x) + std::fabs(c.y - c0.y); }
+			std::vector<Contact> cs;
+			PushOutSphere(c, 0.9f, &cs);
+			for (const Contact &ct : cs) {
+				if (std::fabs(ct.n.z) > 0.7f) continue;
+				vp::V3 n = {ct.n.x, ct.n.y, 0.0f};
+				n = vp::norm(n);
+				gPhys.pos.x += n.x * ct.depth; gPhys.pos.y += n.y * ct.depth;
+				vp::V3 pt = {c.x - n.x * 0.9f - gPhys.pos.x, c.y - n.y * 0.9f - gPhys.pos.y, c.z - gPhys.pos.z};
+				float sp = vp::dot(gPhys.getSpeed(pt), n);
+				{ static int dbg = 0; if (getenv("SA_COLDBG") && dbg++ % 25 == 0 && dbg < 600) fprintf(gLog, "col k=%d n=(%.2f %.2f %.2f) depth %.3f sp %.4f fwd (%.2f %.2f) v (%.4f %.4f) w %.4f\n", k, ct.n.x, ct.n.y, ct.n.z, ct.depth, sp, gPhys.fwd.x, gPhys.fwd.y, gPhys.moveSpeed.x, gPhys.moveSpeed.y, gPhys.turnSpeed.z); }
+				if (sp >= 0.0f) continue;
+				float imp = -(1.0f + 0.05f) * sp * gPhys.massAt(pt, n);
+				vp::V3 f = n * imp;
+				gPhys.applyMoveForce(f); gPhys.applyTurnForce(f, pt);
+			}
 		}
-		if (moved > 0.02f) gPhys.moveSpeed *= 0.7f;
 	}
 	gInsts[g.inst].col = ownCol;
 	gCarSpeed = gPhys.forwardSpeed() * 50.0f;
@@ -2948,7 +2960,7 @@ void Idle(float dt) {
 	}
 	// F: get into the nearest parked car within 5 m / out again
 	static bool fDown = false;
-	if (getenv("SA_AUTODRIVE") && now > 10.0) { sk::keys['F'] = now < 10.2; if (now > 11.0) sk::keys['W'] = true; if (now > 16.0) sk::keys['A'] = true; } // test aid
+	if (getenv("SA_AUTODRIVE") && now > 10.0) { sk::keys['F'] = now < 10.2; if (now > 11.0) sk::keys['W'] = true; if (now > 16.0 && atoi(getenv("SA_AUTODRIVE")) != 2) sk::keys['A'] = true; } // test aid
 	if (sk::keys['F'] && !fDown && gWalk) {
 		if (gDriveGen >= 0) {
 			CarGen &g = gCarGens[gDriveGen];

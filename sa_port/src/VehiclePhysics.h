@@ -44,7 +44,7 @@ public:
 	int wheelsOnGround = 0;
 	float forwardSpeed() const { return dot(moveSpeed, fwd); }   // m per tick
 	uint8_t gear = 1;
-private:
+public:
 	// handling in game units
 	float mass = 1500, turnMass = 3000, tractionMult = 1, tractionLoss = 0.8f, tractionBias = 0.5f, brakeDecel = 0, brakeBias = 0.5f, steeringLock = 0.5f;
 	float suspForce = 1, suspDamping = 0.1f, suspUpper = 0.2f, suspLower = -0.15f, suspBias = 0.5f, suspAntiDive = 0, dragMult = 1, airResistance = 0.001f;
