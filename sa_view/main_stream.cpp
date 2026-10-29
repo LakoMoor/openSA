@@ -345,7 +345,7 @@ void LoadColBounds() {
 }
 
 // IPL car generators (placement of parked vehicles, see UpdateCars)
-struct CarGen { rw::V3d pos; float angle; int model, c1, c2; rw::Clump *clump = nil; bool tried = false; };
+struct CarGen { rw::V3d pos; float angle; int model, c1, c2; rw::Clump *clump = nil; bool tried = false; int inst = -1; };
 std::vector<CarGen> gCarGens;
 
 void CollectPlacements() {
@@ -408,6 +408,16 @@ void CollectPlacements() {
 			if (g >= 0 && parent && i.lodIndex >= 0 && i.lodIndex < (int)parent->size() && (*parent)[i.lodIndex] >= 0)
 				gInsts[g].lodParent = (*parent)[i.lodIndex];
 		}
+	}
+	// every car generator gets a collision proxy Inst (id -1, col set while the car is spawned) so GroundHeight / RayCastWorld / PushOutSphere see cars
+	for (CarGen &g : gCarGens) {
+		Inst i;
+		i.id = -1;
+		i.pos = g.pos;
+		i.rot = {0, 0, 0, 1};
+		g.inst = (int)gInsts.size();
+		gGrid[CellKey(CellOf(g.pos.x), CellOf(g.pos.y))].push_back(g.inst);
+		gInsts.push_back(i);
 	}
 	int withParent = 0;
 	for (auto &i : gInsts)
@@ -642,6 +652,19 @@ bool PushOutSphere(rw::V3d &c, float r, std::vector<Contact> *out = nullptr) {
 					lc = QuatRotate(in.rot, {c.x - in.pos.x, c.y - in.pos.y, c.z - in.pos.z}, true);
 					pushed = true;
 				}
+				for (const sa::ColSphereT &sp : in.col->spheres) { // vehicles are mostly spheres + boxes
+					rw::V3d d = {lc.x - sp.center[0], lc.y - sp.center[1], lc.z - sp.center[2]};
+					float dist2 = d.x * d.x + d.y * d.y + d.z * d.z, rr = r + sp.radius;
+					if (dist2 >= rr * rr || dist2 < 1e-12f) continue;
+					rw::V3d wd = QuatRotate(in.rot, d, false);
+					float dist = std::sqrt(dist2);
+					if (out) { out->push_back({{wd.x / dist, wd.y / dist, wd.z / dist}, rr - dist, 0}); pushed = true; continue; }
+					if (std::fabs(wd.z) / dist > 0.7f) continue;
+					float k = (rr - dist) / dist;
+					c.x += wd.x * k; c.y += wd.y * k;
+					lc = QuatRotate(in.rot, {c.x - in.pos.x, c.y - in.pos.y, c.z - in.pos.z}, true);
+					pushed = true;
+				}
 				for (const sa::ColBox &b : in.col->boxes) {
 					rw::V3d q = {std::min(std::max(lc.x, b.min[0]), b.max[0]), std::min(std::max(lc.y, b.min[1]), b.max[1]), std::min(std::max(lc.z, b.min[2]), b.max[2])};
 					rw::V3d d = {lc.x - q.x, lc.y - q.y, lc.z - q.z};
@@ -716,6 +739,8 @@ void CollideWalker() {
 	} else {
 		dx = shift.x * maxDepth * 0.75f; dy = shift.y * maxDepth * 0.75f;
 	}
+	static const bool dbg2 = getenv("SA_COLDEBUG2") != nullptr;
+	if (dbg2) fprintf(gLog, "cd2: pos %.2f %.2f n=%d shift %.2f %.2f %.2f depth %.3f d %.3f %.3f\n", camPos.x, camPos.y, n, shift.x, shift.y, shift.z, maxDepth, dx, dy);
 	camPos.x += dx; camPos.y += dy;
 	prevX = camPos.x; prevY = camPos.y;
 }
@@ -823,7 +848,7 @@ void UpdateStreaming(double now) {
 			if (g == gGrid.end()) continue;
 			for (int idx : g->second) {
 				Inst &in = gInsts[idx];
-				if (in.clump) continue;
+				if (in.id < 0 || in.clump) continue; // id < 0: car collision proxy (see UpdateCars)
 				float fading, d = DrawLimit(in, fading), dist = Dist3(in);
 				if (dist - kStreamMargin >= d) continue; // outside the request margin
 				bool drawable = dist - kFading < d && !CoveredByChildren(in);
@@ -1238,7 +1263,7 @@ const char *FrameName(rw::Frame *f) { return nodeNameOffset >= 0 && f ? PLUGINOF
 // model for modelId -1, vehicle physics); colours are the first carcols.dat pair of the model (generator colour indices are not applied); the stock
 // wheel is wheel_gn1 (IDE wheelId is -1 for every car, the original choice is not verified); the car sits on the COL ground below the generator at the
 // lowest wheel / body vertex.
-struct VehProto { rw::Clump *clump = nil; float minZ = 0; };
+struct VehProto { rw::Clump *clump = nil; float minZ = 0; sa::ColModel col; bool hasCol = false; };
 std::unordered_map<int, VehProto> gVehProtos;
 std::vector<rw::RGBA> gCarPalette;
 std::unordered_map<std::string, std::vector<int>> gCarPairs; // lower-case model -> first colour pair (4 indices)
@@ -1380,9 +1405,17 @@ VehProto *GetVehicleProto(int id) {
 			minZ = std::min(minZ, q.z);
 		}
 	}
+	// the car's collision model is embedded in the DFF as a 0x253F2FA extension chunk holding a COL3 record
+	for (size_t k = 0; k + 12 < dff.size(); k++)
+		if (dff[k] == 0xFA && dff[k + 1] == 0xF2 && dff[k + 2] == 0x53 && dff[k + 3] == 0x02 && !memcmp(&dff[k + 12], "COL", 3)) {
+			std::unordered_map<std::string, sa::ColModel> m;
+			sa::ParseColModels(&dff[k + 12], dff.size() - k - 12, m);
+			if (!m.empty()) { vp.col = std::move(m.begin()->second); vp.hasCol = true; }
+			break;
+		}
 	vp.clump = c;
 	vp.minZ = minZ < 1e8f ? minZ : -0.5f;
-	fprintf(gLog, "vehicle %s loaded (min z %.2f)\n", name.c_str(), vp.minZ);
+	fprintf(gLog, "vehicle %s loaded (min z %.2f, col %s: %zu tris %zu boxes %zu spheres)\n", name.c_str(), vp.minZ, vp.hasCol ? "ok" : "none", vp.col.tris.size(), vp.col.boxes.size(), vp.col.spheres.size());
 	return &vp;
 }
 
@@ -1391,7 +1424,7 @@ void UpdateCars() {
 	if (!init) { init = true; LoadCarcols(); fprintf(gLog, "car generators with a fixed vehicle model: %zu\n", gCarGens.size()); }
 	for (CarGen &g : gCarGens) {
 		float dx = g.pos.x - camPos.x, dy = g.pos.y - camPos.y, d2 = dx * dx + dy * dy;
-		if (g.clump && d2 > (kCarSpawnRange + 50.0f) * (kCarSpawnRange + 50.0f)) { gWorld->removeClump(g.clump); g.clump->destroy(); g.clump = nil; g.tried = false; continue; }
+		if (g.clump && d2 > (kCarSpawnRange + 50.0f) * (kCarSpawnRange + 50.0f)) { gWorld->removeClump(g.clump); g.clump->destroy(); g.clump = nil; g.tried = false; gInsts[g.inst].col = nil; continue; }
 		if (d2 >= kCarSpawnRange * kCarSpawnRange || g.clump || g.tried) continue;
 		VehProto *vp = GetVehicleProto(g.model);
 		if (!vp) { g.tried = true; continue; }
@@ -1405,6 +1438,12 @@ void UpdateCars() {
 		f->translate(&p, rw::COMBINEPOSTCONCAT);
 		gWorld->addClump(c);
 		g.clump = c;
+		Inst &pi = gInsts[g.inst];
+		float h = g.angle * 0.5f;
+		pi.pos = p;
+		pi.rot = {0, 0, std::sin(h), std::cos(h)};
+		pi.col = vp->hasCol ? &vp->col : nil;
+		pi.colRadius = vp->hasCol ? vp->col.bound.radius : 0;
 	}
 }
 
