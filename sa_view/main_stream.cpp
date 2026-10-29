@@ -600,7 +600,9 @@ rw::V3d ClosestOnTri(const rw::V3d &p, const float *A, const float *B, const flo
 
 // Pushes a sphere out of the collision geometry of nearby instances; only the horizontal part of the push is applied and
 // near-horizontal (walkable) surfaces are ignored. Returns true if anything pushed.
-bool PushOutSphere(rw::V3d &c, float r) {
+bool gWalk = false, gGrounded = true, gSwimming = false;
+struct Contact { rw::V3d n; float depth; };
+bool PushOutSphere(rw::V3d &c, float r, std::vector<Contact> *out = nullptr) {
 	bool pushed = false;
 	for (int cx = CellOf(c.x - 3); cx <= CellOf(c.x + 3); cx++)
 		for (int cy = CellOf(c.y - 3); cy <= CellOf(c.y + 3); cy++) {
@@ -622,6 +624,7 @@ bool PushOutSphere(rw::V3d &c, float r) {
 					if (dist2 >= r * r || dist2 < 1e-12f) continue;
 					rw::V3d wd = QuatRotate(in.rot, d, false); // world-space push direction
 					float dist = std::sqrt(dist2), nz = std::fabs(wd.z) / dist;
+					if (out) { out->push_back({{wd.x / dist, wd.y / dist, wd.z / dist}, r - dist}); pushed = true; continue; }
 					if (nz > 0.7f) continue; // floor or ceiling, not a wall
 					float k = (r - dist) / dist;
 					c.x += wd.x * k; c.y += wd.y * k;
@@ -635,6 +638,7 @@ bool PushOutSphere(rw::V3d &c, float r) {
 					if (dist2 >= r * r || dist2 < 1e-12f) continue;
 					rw::V3d wd = QuatRotate(in.rot, d, false);
 					float dist = std::sqrt(dist2);
+					if (out) { out->push_back({{wd.x / dist, wd.y / dist, wd.z / dist}, r - dist}); pushed = true; continue; }
 					if (std::fabs(wd.z) / dist > 0.7f) continue;
 					float k = (r - dist) / dist;
 					c.x += wd.x * k; c.y += wd.y * k;
@@ -649,16 +653,49 @@ bool PushOutSphere(rw::V3d &c, float r) {
 // ped collision model, verified at 0x5BAB5C (CTempColModels): 3 spheres r=0.35 at z -0.2/0.2/0.6 about the ped origin, which is 1.0 above
 // the feet (box min z = -1.0). In walk mode camPos IS the ped origin (the camera itself is the third-person follow camera).
 void CollideWalker() {
+	// CPhysical::ProcessShiftSectorList (0x546670, as reversed in gta-reversed): sum the contact normals of all three spheres, track the deepest contact, clamp the
+	// sum to unit length, then move the ped by shift * (1.5 * depth) (+ the 0.3 / 0.005 terms of the reference); one pass per frame. For a ped on the ground the
+	// contact normal first has its xy part normalised and is renormalised (CPed::ProcessEntityCollision 0x5E2530, second contact loop).
+	// DEVIATIONS: only the horizontal part of the shift is applied (height comes from my ground line), the 0x5E2530 special case for near-vertical-down floor
+	// normals is skipped, vehicles/peds/objects are not contact sources, and the original's follow-up ProcessCollisionSectorList check is not done.
 	constexpr float kRadius = 0.35f;
 	const float heights[3] = {-0.2f, 0.2f, 0.6f}; // relative to the ped origin
-	for (int iter = 0; iter < 3; iter++) {
-		bool any = false;
-		for (float h : heights) {
-			rw::V3d c = {camPos.x, camPos.y, camPos.z + h};
-			if (PushOutSphere(c, kRadius)) { camPos.x = c.x; camPos.y = c.y; any = true; }
-		}
-		if (!any) break;
+	std::vector<Contact> contacts;
+	for (float h : heights) {
+		rw::V3d c = {camPos.x, camPos.y, camPos.z + h};
+		PushOutSphere(c, kRadius, &contacts);
 	}
+	rw::V3d shift = {0, 0, 0};
+	float maxDepth = 0.0f;
+	int n = 0;
+	for (Contact &ct : contacts) {
+		if (ct.depth <= 0.0f) continue;
+		rw::V3d v = ct.n;
+		if (gGrounded) {
+			float hz = std::sqrt(v.x * v.x + v.y * v.y);
+			if (hz != 0.0f) { v.x /= hz; v.y /= hz; }
+			float l = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+			if (l > 0.0f) { v.x /= l; v.y /= l; v.z /= l; }
+		}
+		shift.x += v.x; shift.y += v.y; shift.z += v.z;
+		maxDepth = std::max(maxDepth, ct.depth);
+		n++;
+	}
+	static int dbgN = 0;
+	if (getenv("SA_COLDEBUG") && (dbgN++ % 30 == 0)) fprintf(gLog, "collide: contacts=%zu used=%d at (%.1f,%.1f,%.1f)\n", contacts.size(), n, camPos.x, camPos.y, camPos.z);
+	if (!n) return;
+	float mag = std::sqrt(shift.x * shift.x + shift.y * shift.y + shift.z * shift.z);
+	if (mag > 1.0f) { shift.x /= mag; shift.y /= mag; shift.z /= mag; }
+	float dx, dy;
+	if (shift.z >= -0.5f) {
+		float dm = 1.5f * maxDepth;
+		dx = shift.x * dm; dy = shift.y * dm;
+		if (dm >= 0.005f) { if (dm > 0.3f) { dx += shift.x * maxDepth * 0.3f; dy += shift.y * maxDepth * 0.3f; } }
+		else { dx += shift.x * maxDepth * 0.005f; dy += shift.y * maxDepth * 0.005f; }
+	} else {
+		dx = shift.x * maxDepth * 0.75f; dy = shift.y * maxDepth * 0.75f;
+	}
+	camPos.x += dx; camPos.y += dy;
 }
 
 // Walk mode (G): the camera is a point 1.7 m above the ground with gravity. DEVIATION: the original uses a ped with a collision
@@ -688,7 +725,6 @@ bool WaterLevelAt(float x, float y, float &z) {
 	return false;
 }
 
-bool gWalk = false, gGrounded = true, gSwimming = false;
 float gVelZ = 0.0f, gAirVx = 0.0f, gAirVy = 0.0f;
 
 void UpdateWalk(float dt) {
@@ -1634,6 +1670,7 @@ void Idle(float dt) {
 		UpdateWalk(dt);
 	}
 	if (const char *s = getenv("SA_AUTOFLY")) camPos.x += (float)atof(s) * dt; // scripted flight for testing
+	if (const char *s = getenv("SA_AUTOFLYY")) camPos.y += (float)atof(s) * dt;
 	if (!(getenv("SA_CLOCK") && atoi(getenv("SA_CLOCK")) == 0)) gGameMinutes = std::fmod(gGameMinutes + dt * 1000.0f / kMsPerGameMinute, 1440.0f);
 	ApplyTimeOfDay();
 	UpdateStreaming(now);
