@@ -1627,6 +1627,11 @@ void UpdateCars() {
 		}
 		VehProto *vp = GetVehicleProto(g.model, g.c1, g.c2);
 		if (!vp) { g.tried = true; continue; }
+		// CCarGenerator::CheckForBlockage (gta-reversed): no new car while another vehicle already overlaps the spot (retried later, +4 ms in the original).
+		// DEVIATION: vehicles only, using a fixed 2.5 m radius instead of the model's collision bound radius; objects are not checked.
+		bool blocked = false;
+		for (const CarGen &o : gCarGens) if (&o != &g && o.clump) { float ox = o.pos.x - g.pos.x, oy = o.pos.y - g.pos.y; if (ox * ox + oy * oy < 2.5f * 2.5f) { blocked = true; break; } }
+		if (blocked) continue;
 		float gz;
 		if (!GroundHeight(g.pos.x, g.pos.y, g.pos.z + 3.0f, 10.0f, gz)) continue; // no collision loaded here yet: retry next frame
 		rw::Clump *c = vp->clump->clone();
