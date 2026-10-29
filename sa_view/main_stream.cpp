@@ -1274,6 +1274,11 @@ void DrawWater() {
 	for (int layer = 0; layer < 2; layer++) {
 		const float scale = layer == 0 ? 25.0f : 12.5f;
 		const rw::uint8 alpha = layer == 0 ? 160 : 90;
+		// UV shift (RenderWater 0x6EF673): layer 0 V = cos((t & 0x1FFF) * 0.00076699) * 0.024 + accumulator; the accumulators and layer 1's term scale with
+		// the water wind (0xC22890/94) and 0xC812E8, treated as 0 here. DEVIATION: t is wall-clock ms instead of the game timer, wind is assumed calm.
+		static const auto t0 = std::chrono::steady_clock::now();
+		unsigned tms = (unsigned)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+		float shiftU = 0.0f, shiftV = layer == 0 ? std::cos((float)(tms & 0x1FFF) * 0.0007669904f) * 0.024f : 0.0f;
 		std::vector<rw::RWDEVICE::Im3DVertex> verts;
 		std::vector<rw::uint16> idx;
 		for (const sa::WaterPoly &w : gWater) {
@@ -1288,7 +1293,7 @@ void DrawWater() {
 				rw::RWDEVICE::Im3DVertex v;
 				v.setX(w.x[i]); v.setY(w.y[i]); v.setZ(w.z[i]);
 				v.setColor(c8(gTc.water[0]), c8(gTc.water[1]), c8(gTc.water[2]), alpha);
-				v.setU(w.x[i] / scale); v.setV(w.y[i] / scale);
+				v.setU(w.x[i] / scale + shiftU); v.setV(w.y[i] / scale + shiftV);
 				verts.push_back(v);
 			}
 			idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
