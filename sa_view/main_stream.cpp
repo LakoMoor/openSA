@@ -1515,6 +1515,7 @@ void UpdateCars() {
 	static bool init = false;
 	if (!init) {
 		init = true; LoadCarcols(); LoadZones();
+		int shown = 0; for (const CarGen &g : gCarGens) if (g.randomModel && shown++ < 6 && g.pos.z < 100) fprintf(gLog, "random gen sample (%.0f,%.0f,%.0f)\n", g.pos.x, g.pos.y, g.pos.z);
 		size_t fixedN = 0; for (const CarGen &g : gCarGens) if (!g.randomModel) fixedN++;
 		fprintf(gLog, "car generators: %zu fixed model, %zu random model\n", fixedN, gCarGens.size() - fixedN);
 		// Run main.scm headless for 4 s of game time so INITIAL sets the zone population types.
@@ -1532,6 +1533,7 @@ void UpdateCars() {
 		if (g.model < 0) {
 			g.model = PickRandomGeneratorModel(hour, false);
 			if (g.model < 0) { g.tried = true; continue; }
+			fprintf(gLog, "random generator at (%.0f,%.0f) zone %s -> model %d\n", g.pos.x, g.pos.y, ZoneNameAt(camPos.x, camPos.y, camPos.z), g.model);
 			if (!g.ignorePop && parked >= parkedLimit) continue;
 		}
 		VehProto *vp = GetVehicleProto(g.model, g.c1, g.c2);
