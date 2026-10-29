@@ -1446,6 +1446,68 @@ void DrawWater() {
 	rw::SetRenderState(rw::CULLMODE, rw::CULLBACK);
 }
 
+// CWeather::RenderRainStreaks (0x72AF70) + the Rain step in CWeather::Update (0x72BBE1): 32 line streaks in a 5 m box 6 m ahead of the camera.
+// DEVIATIONS: Wind/WindDir taken as 0 (streaks fall straight), FogReduction as 0, no rain particles/splashes/puddles/wet roads, no CullZone no-rain test.
+float gRain = 0.0f;
+int gRainStrength = 0;
+
+void DrawRain(float dt, unsigned tms) {
+	auto rainy = [](int w) { return w == 8 || w == 16; };
+	float f = std::fmod(gGameMinutes, 60.0f) / 60.0f;
+	if (gWeatherForced) f = 1.0f;
+	float a = rainy(gOldWeather) ? 1.0f : 0.0f, b = rainy(gWeather) ? 1.0f : 0.0f;
+	float intensity = (float)((tms >> 13) % 4) * 0.1f + 0.7f;
+	float target = intensity * (a == b ? b : a + (b - a) * f), step = dt * 50.0f * 0.005f;
+	gRain = gRain < target ? std::min(gRain + step, target) : std::max(gRain - step, target);
+
+	int strength = (int)(gRain * 110.0f);
+	if (gRainStrength < strength) gRainStrength++; else if (gRainStrength > 0) gRainStrength--;
+	if (!gRainStrength || camPos.z > 900.0f) return;
+
+	static int px[32], py[32], pz[32];
+	static uint8_t pa[32];
+	auto rnd = [](float lo, float hi) { return lo + (hi - lo) * ((float)rand() / (float)RAND_MAX); };
+	rw::Matrix *m = &gCamera->getFrame()->matrix;
+	std::vector<rw::RWDEVICE::Im3DVertex> verts;
+	std::vector<rw::uint16> idx;
+	for (int s = 0; s < 32; s++) {
+		float dx = camPos.x - px[s], dy = camPos.y - py[s], dz = camPos.z - pz[s];
+		if (!pa[s] || pz[s] <= 0 || dx * dx + dy * dy + dz * dz > 64.0f) {
+			px[s] = (int)(rnd(0.0f, 5.0f) + m->at.x * 6.0f + camPos.x - 2.5f);
+			py[s] = (int)(rnd(0.0f, 5.0f) + m->at.y * 6.0f + camPos.y - 2.5f);
+			pz[s] = (int)(rnd(0.0f, 5.0f) + m->at.z * 6.0f + camPos.z - 2.5f);
+			pa[s] = (uint8_t)((float)gRainStrength * 0.6f);
+		}
+		float ox = rnd(-0.2f, 0.2f), oy = rnd(-0.2f, 0.2f), oz = rnd(-0.1f, 0.1f);
+		float o1z = oz + rnd(0.1f, 0.5f);
+		uint8_t al[2] = {pa[s], (uint8_t)(pa[s] / 2u)};
+		float oz2[2] = {oz, o1z};
+		for (int v = 0; v < 2; v++) {
+			rw::RWDEVICE::Im3DVertex iv;
+			iv.setX((float)px[s] + ox); iv.setY((float)py[s] + oy); iv.setZ((float)pz[s] + oz2[v]);
+			iv.setColor(210, 210, 230, al[v]);
+			iv.setU(0.0f); iv.setV(0.0f);
+			idx.push_back((rw::uint16)verts.size());
+			verts.push_back(iv);
+		}
+		pz[s] -= (int)rnd(0.01f, 0.1f);
+		int dec = 2 + rand() % 4;
+		pa[s] = (uint8_t)std::max(0, (int)pa[s] - dec);
+	}
+	rw::SetRenderState(rw::ZWRITEENABLE, 0);
+	rw::SetRenderState(rw::ZTESTENABLE, 1);
+	rw::SetRenderState(rw::FOGENABLE, 0);
+	rw::SetRenderState(rw::SRCBLEND, rw::BLENDSRCALPHA);
+	rw::SetRenderState(rw::DESTBLEND, rw::BLENDINVSRCALPHA);
+	rw::SetRenderState(rw::VERTEXALPHA, 1);
+	rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
+	rw::im3d::Transform(verts.data(), (rw::int32)verts.size(), nil, rw::im3d::EVERYTHING);
+	rw::im3d::RenderIndexedPrimitive(rw::PRIMTYPELINELIST, idx.data(), (rw::int32)idx.size());
+	rw::im3d::End();
+	rw::SetRenderState(rw::ZWRITEENABLE, 1);
+	rw::SetRenderState(rw::VERTEXALPHA, 0);
+}
+
 void Idle(float dt) {
 	static auto start = std::chrono::steady_clock::now();
 	double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
@@ -1510,6 +1572,7 @@ void Idle(float dt) {
 	rw::SetRenderState(rw::ALPHATESTREF, 100);
 	gWorld->render();
 	DrawWater();
+	DrawRain(dt, (unsigned)(now * 1000.0));
 	gCamera->endUpdate();
 	gCamera->showRaster(0);
 }
