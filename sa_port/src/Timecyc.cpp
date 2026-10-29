@@ -43,6 +43,7 @@ bool Timecyc::Load(const std::string &path) {
 			           rest + 4, rest + 5, rest + 6, rest + 7, rest + 8, rest + 9, rest + 10) >= 8) {
 				// after fogStart: lightOnGround, low cloud rgb, bottom cloud rgb, water rgb + alpha (column order from CTimeCycle::Initialise)
 				for (int i = 0; i < 4; i++) k.water[i] = rest[7 + i];
+				for (int i = 0; i < 3; i++) k.lowCloud[i] = rest[1 + i];
 				k.sunSize = (float)(int)(a * 10.0f + 0.5f); // stored as int8(sunSize*10+0.5) by CTimeCycle::Initialise
 				k.farClip = farClip;
 				k.fogStart = fogStart;
@@ -76,6 +77,7 @@ TimecycKey Timecyc::Sample(int weather, float hour) const {
 	mix(A.skyBottom, B.skyBottom, out.skyBottom);
 	mix(A.sunCore, B.sunCore, out.sunCore);
 	mix(A.sunCorona, B.sunCorona, out.sunCorona);
+	for (int i = 0; i < 3; i++) out.lowCloud[i] = A.lowCloud[i] + (B.lowCloud[i] - A.lowCloud[i]) * t;
 	for (int i = 0; i < 4; i++) out.water[i] = A.water[i] + (B.water[i] - A.water[i]) * t;
 	out.sunSize = A.sunSize + (B.sunSize - A.sunSize) * t;
 	out.farClip = A.farClip + (B.farClip - A.farClip) * t;
@@ -94,6 +96,7 @@ TimecycKey Timecyc::Lerp(const TimecycKey &a, const TimecycKey &b, float t) {
 	mix(a.skyBottom, b.skyBottom, o.skyBottom);
 	mix(a.sunCore, b.sunCore, o.sunCore);
 	mix(a.sunCorona, b.sunCorona, o.sunCorona);
+	for (int i = 0; i < 3; i++) o.lowCloud[i] = a.lowCloud[i] + (b.lowCloud[i] - a.lowCloud[i]) * t;
 	for (int i = 0; i < 4; i++) o.water[i] = a.water[i] + (b.water[i] - a.water[i]) * t;
 	o.sunSize = a.sunSize + (b.sunSize - a.sunSize) * t;
 	o.farClip = a.farClip + (b.farClip - a.farClip) * t;

@@ -9,6 +9,7 @@ struct TimecycKey {
 	float ambient[3], ambientObj[3], directional[3], skyTop[3], skyBottom[3];
 	float sunCore[3], sunCorona[3];
 	float sunSize = 0; // int8(sunSize*10+0.5) as stored by CTimeCycle::Initialise
+	float lowCloud[3] = {}; // low-cloud rgb 0..255
 	float water[4] = {}; // rgb 0..255 + alpha (timecyc water columns)
 	float farClip = 0, fogStart = 0;
 	bool ok = false;

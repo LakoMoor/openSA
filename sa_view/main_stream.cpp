@@ -1091,6 +1091,76 @@ void DrawSunDisc(float W, float H, float tanHalf) {
 	quad(gTc.sunSize * 2.7335f * pxPerUnit, gTc.sunCore, 255);
 }
 
+// Low clouds: CClouds::Render_RenderLowClouds (0x7138xx..): 12 additive "cloud1" sprites at camera + offset*(800,800,60) + (0,0,40) with z not
+// offset by the camera height, sized by CSprite::CalcScreenCoors * (320, 40), tinted by the timecyc low-cloud colour scaled by (1 - balance),
+// balance = max(foggyness, cloudCoverage, extraSunnyness) from the weather pair (CWeather::Update 0x72B850 flags, blended by the hour fraction).
+// DEVIATION: sprite extents are read as half-sizes in the original 640x448 screen units and scaled to the window; the roll is 0; the
+// rainbow, moon and Rockstar-logo parts of CClouds::Render are not drawn.
+rw::Texture *gCloudTex = nullptr;
+bool gCloudTried = false;
+
+float WeatherCloudBalance() {
+	auto extraSunny = [](int w) { return w == 0 || w == 2 || w == 6 || w == 11 || w == 13 || w == 17; };
+	auto sunny = [](int w) { return w == 1 || w == 3 || w == 5 || w == 10 || w == 14 || w == 18; };
+	auto foggy = [](int w) { return w == 9 || w == 19; };
+	float f = std::fmod(gGameMinutes, 60.0f) / 60.0f;
+	if (gWeatherForced) f = 1.0f;
+	auto blend = [&](auto pred) {
+		float a = pred(gOldWeather) ? 1.0f : 0.0f, b = pred(gWeather) ? 1.0f : 0.0f;
+		return a == b ? b : a + (b - a) * f;
+	};
+	float cover = blend([&](int w) { return !sunny(w) && !extraSunny(w); });
+	return std::max({blend(foggy), cover, blend(extraSunny)});
+}
+
+void DrawLowClouds(float W, float H, float tanHalf) {
+	if (!gCloudTried) {
+		gCloudTried = true;
+		std::ifstream f(gameDir + "/models/particle.txd", std::ios::binary);
+		std::vector<uint8_t> b((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+		if (rw::TexDictionary *d = b.empty() ? nil : ReadTxd(b)) {
+			FORLIST(lnk, d->textures) {
+				rw::Texture *t = rw::Texture::fromDict(lnk);
+				if (Lower(t->name) == "cloud1") gCloudTex = t;
+			}
+		}
+		fprintf(gLog, "low clouds: cloud1 %s\n", gCloudTex ? "loaded" : "missing");
+	}
+	if (!gCloudTex) return;
+	float keep = 1.0f - WeatherCloudBalance();
+	if (keep <= 0.0f) return;
+	static const float kOff[12][3] = {{1.0f, 0.0f, 0.0f}, {0.7f, -0.7f, 1.0f}, {0.0f, -1.0f, 0.5f}, {-0.7f, -0.7f, 0.0f}, {-1.0f, 0.0f, 1.0f}, {-0.7f, 0.7f, 0.3f},
+	                                  {0.0f, 1.0f, 0.9f}, {0.7f, 0.7f, 0.4f}, {0.8f, 0.4f, 1.3f}, {-0.8f, 0.4f, 1.4f}, {0.4f, -0.8f, 1.2f}, {-0.4f, -0.8f, 1.7f}};
+	rw::Matrix *m = &gCamera->getFrame()->matrix;
+	float aspect = W / H, fovDeg = 2.0f * std::atan(tanHalf * aspect) * 180.0f / 3.14159265f;
+	uint8_t cr = (uint8_t)(gTc.lowCloud[0] * keep), cg = (uint8_t)(gTc.lowCloud[1] * keep), cb = (uint8_t)(gTc.lowCloud[2] * keep);
+	rw::SetRenderStatePtr(rw::TEXTURERASTER, gCloudTex->raster);
+	rw::SetRenderState(rw::VERTEXALPHA, 1);
+	rw::SetRenderState(rw::SRCBLEND, rw::BLENDONE);
+	rw::SetRenderState(rw::DESTBLEND, rw::BLENDONE);
+	float recipZ = 1.0f / gCamera->nearPlane;
+	for (const auto &o : kOff) {
+		float dx = o[0] * 800.0f + camPos.x - camPos.x, dy = o[1] * 800.0f, dz = o[2] * 60.0f + 40.0f - camPos.z;
+		float cx = dx * m->right.x + dy * m->right.y + dz * m->right.z, cy = dx * m->up.x + dy * m->up.y + dz * m->up.z,
+		      cz = dx * m->at.x + dy * m->at.y + dz * m->at.z;
+		if (cz <= gCamera->nearPlane + 1.0f) continue;
+		float sx = W * 0.5f + cx / cz / (tanHalf * aspect) * W * 0.5f, sy = H * 0.5f - cy / cz / tanHalf * H * 0.5f;
+		float rd = 1.0f / cz, scale = rd / fovDeg * 70.0f;
+		float pw = 640.0f * scale * 320.0f * (W / 640.0f), ph = 448.0f * scale * 40.0f * (H / 448.0f);
+		rw::RWDEVICE::Im2DVertex v[4];
+		float xs[4] = {sx - pw, sx + pw, sx - pw, sx + pw}, ys[4] = {sy - ph, sy - ph, sy + ph, sy + ph}, us[4] = {0, 1, 0, 1}, vs[4] = {0, 0, 1, 1};
+		for (int i = 0; i < 4; i++) {
+			v[i].setScreenX(xs[i]); v[i].setScreenY(ys[i]); v[i].setScreenZ(rw::im2d::GetNearZ());
+			v[i].setCameraZ(gCamera->nearPlane); v[i].setRecipCameraZ(recipZ);
+			v[i].setColor(cr, cg, cb, 255);
+			v[i].setU(us[i], recipZ); v[i].setV(vs[i], recipZ);
+		}
+		rw::uint16 idx[6] = {0, 1, 2, 1, 3, 2};
+		rw::im2d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, v, 4, idx, 6);
+	}
+	rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
+}
+
 // Sky gradient: timecyc sky-top colour at the top of the screen blending to sky-bottom at the horizon (the clear colour fills below it).
 // DEVIATION: the original (CClouds::Render) also draws the sun, moon, cloud layers and low-level clouds; none of that is implemented here.
 void DrawSky() {
@@ -1156,6 +1226,7 @@ void DrawSky() {
 		yPrev = y; cPrev = stops[i].c;
 	}
 	strip(yPrev, greyCol, H + 1.0f, greyCol); // DEVIATION: below -0.3 the original shows the grey back wall / clear colour; filled with the grey here
+	DrawLowClouds(W, H, tanHalf);
 	DrawSunDisc(W, H, tanHalf);
 	rw::SetRenderState(rw::ZTESTENABLE, 1);
 	rw::SetRenderState(rw::ZWRITEENABLE, 1);
