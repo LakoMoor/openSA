@@ -345,7 +345,7 @@ void LoadColBounds() {
 }
 
 // IPL car generators (placement of parked vehicles, see UpdateCars)
-struct CarGen { rw::V3d pos; float angle; int model, c1, c2; rw::Clump *clump = nil; bool tried = false; int inst = -1; };
+struct CarGen { rw::V3d pos; float angle; int model, c1, c2; rw::Clump *clump = nil; bool tried = false; int inst = -1; bool ignorePop = false; };
 std::vector<CarGen> gCarGens;
 
 void CollectPlacements() {
@@ -402,7 +402,7 @@ void CollectPlacements() {
 			if (it != localToGlobal.end()) parent = &it->second;
 		}
 		for (auto &cg : b.carGens)
-			if (cg.modelId >= 400 && gW.ide.FindVehicle(cg.modelId)) gCarGens.push_back({{cg.pos[0], cg.pos[1], cg.pos[2]}, cg.angle, cg.modelId, cg.color1, cg.color2});
+			if (cg.modelId >= 400 && gW.ide.FindVehicle(cg.modelId)) { gCarGens.push_back({{cg.pos[0], cg.pos[1], cg.pos[2]}, cg.angle, cg.modelId, cg.color1, cg.color2}); gCarGens.back().ignorePop = (cg.flags & 2) != 0; }
 		for (auto &i : b.insts) {
 			int g = add(i.modelId, i.pos[0], i.pos[1], i.pos[2], i.rot, i.flags & 0xFF);
 			if (g >= 0 && parent && i.lodIndex >= 0 && i.lodIndex < (int)parent->size() && (*parent)[i.lodIndex] >= 0)
@@ -1423,12 +1423,18 @@ VehProto *GetVehicleProto(int id) {
 }
 
 void UpdateCars() {
+	// CCarGenerator::DoInternalProcessing: unless the generator ignores the population limit, no new parked car while NumParkedCars >= 5 (10 between 21:00 and 07:00).
+	// DEVIATION: NumParkedCars here counts only the cars shown by this viewer (the original also counts random-model ones and applies delays / probability).
+	float hour = std::fmod(gGameMinutes, 1440.0f) / 60.0f;
+	int parkedLimit = (hour >= 21.0f || hour < 7.0f) ? 10 : 5, parked = 0;
+	for (const CarGen &g : gCarGens) if (g.clump && !g.ignorePop) parked++;
 	static bool init = false;
 	if (!init) { init = true; LoadCarcols(); fprintf(gLog, "car generators with a fixed vehicle model: %zu\n", gCarGens.size()); }
 	for (CarGen &g : gCarGens) {
 		float dx = g.pos.x - camPos.x, dy = g.pos.y - camPos.y, d2 = dx * dx + dy * dy;
 		if (g.clump && d2 > (kCarSpawnRange + 50.0f) * (kCarSpawnRange + 50.0f)) { gWorld->removeClump(g.clump); g.clump->destroy(); g.clump = nil; g.tried = false; gInsts[g.inst].col = nil; continue; }
 		if (d2 >= kCarSpawnRange * kCarSpawnRange || g.clump || g.tried) continue;
+		if (!g.ignorePop && parked >= parkedLimit) continue;
 		VehProto *vp = GetVehicleProto(g.model);
 		if (!vp) { g.tried = true; continue; }
 		float gz;
@@ -1441,6 +1447,7 @@ void UpdateCars() {
 		f->translate(&p, rw::COMBINEPOSTCONCAT);
 		gWorld->addClump(c);
 		g.clump = c;
+		if (!g.ignorePop) parked++;
 		Inst &pi = gInsts[g.inst];
 		float h = g.angle * 0.5f;
 		pi.pos = p;
