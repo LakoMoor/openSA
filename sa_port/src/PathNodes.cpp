@@ -1,5 +1,6 @@
 #include "PathNodes.h"
 #include <cstdio>
+#include <algorithm>
 #include <cstring>
 
 bool PathData::load(const std::string &dir)
@@ -32,6 +33,28 @@ bool PathData::load(const std::string &dir)
 			n.spawnProbability = fl >> 16 & 0xF; n.behaviourType = fl >> 20 & 0xF;
 			n.vehicle = i < ar.numVehicleNodes;
 			ar.nodes.push_back(n);
+		}
+		ar.carLinks.reserve(ar.numCarLinks);
+		for (int i = 0; i < ar.numCarLinks; i++) {
+			uint8_t r[14];
+			if (std::fread(r, 1, 14, f) != 14) break;
+			int16_t px, py; std::memcpy(&px, r, 2); std::memcpy(&py, r + 2, 2);
+			CarPathLink l;
+			l.x = px / 8.0f; l.y = py / 8.0f;
+			std::memcpy(&l.attachedTo.area, r + 4, 2); std::memcpy(&l.attachedTo.node, r + 6, 2);   // CNodeAddress { m_wAreaId, m_wNodeId }
+			l.dirX = (int8_t)r[8] / 100.0f; l.dirY = (int8_t)r[9] / 100.0f;
+			l.width = (int8_t)r[10] / 16.0f;
+			l.oppositeLanes = r[11] & 7; l.sameLanes = r[11] >> 3 & 7; l.trafficLightDir = r[11] >> 6 & 1;
+			uint16_t w; std::memcpy(&w, r + 12, 2); l.trafficLightState = w & 3;
+			ar.carLinks.push_back(l);
+		}
+		const int total = ar.numAddresses + 192;   // + NUM_DYNAMIC_LINKS_PER_AREA * 12 (verified against file sizes)
+		ar.links.resize(total);
+		if (ar.numAddresses && std::fread(ar.links.data(), 4, total, f) == (size_t)total) {
+			ar.naviLinks.resize(ar.numAddresses);
+			std::fread(ar.naviLinks.data(), 2, ar.numAddresses, f);
+			ar.linkLengths.resize(total); std::fread(ar.linkLengths.data(), 1, total, f);
+			ar.intersections.resize(total); std::fread(ar.intersections.data(), 1, total, f);
 		}
 		std::fclose(f);
 		any = true;

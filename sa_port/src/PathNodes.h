@@ -17,9 +17,26 @@ struct PathNode {
 	bool vehicle;          // index < numVehicleNodes (vehicle nodes come first, ped nodes after)
 };
 
+struct NodeAddr { uint16_t area, node; bool valid() const { return area != 0xFFFF && node != 0xFFFF; } };
+
+struct CarPathLink {   // CCarPathLink (14 bytes, "navi node")
+	float x, y;
+	NodeAddr attachedTo;
+	float dirX, dirY;
+	float width;
+	uint8_t oppositeLanes, sameLanes;
+	bool trafficLightDir;
+	uint8_t trafficLightState;
+};
+
 struct PathArea {
 	int numNodes = 0, numVehicleNodes = 0, numPedNodes = 0, numCarLinks = 0, numAddresses = 0;
 	std::vector<PathNode> nodes;
+	std::vector<CarPathLink> carLinks;
+	std::vector<NodeAddr> links;          // node link addresses (numAddresses real entries; node.baseLinkId + i indexes this)
+	std::vector<uint16_t> naviLinks;      // per link: car path link id (10 bits) | area (6 bits)
+	std::vector<uint8_t> linkLengths;     // per link, metres
+	std::vector<uint8_t> intersections;   // per link flags
 };
 
 struct PathData {
