@@ -1550,7 +1550,7 @@ uint32_t gPickRng = 0x1234567;
 
 // Random generator model. Original: CCarGenerator picks from CPopulation::m_AppropriateLoadedCars (cars streamed for the player's zone) via
 // CLoadedCarGroup::PickRandomCar(true, true): weighted by IDE frequency, normal/poor/rich/motorbike classes only, at most 2 live instances.
-// DEVIATION: no car streaming here, so the candidates are the cargrp.dat group chosen from the player zone's popcycle row; refcount and bounding-length checks are skipped.
+// DEVIATION: no car streaming here, so the candidates are the cargrp.dat group chosen from the player zone's popcycle row; the bounding-length (<= 8 m) check is skipped; the live-instance limit (<= 2) counts only cars this viewer shows.
 int PickRandomGeneratorModel(float hour, bool weekend) {
 	const Zone *z = ZoneAt(camPos.x, camPos.y, camPos.z);
 	if (!z) return -1;
@@ -1572,9 +1572,13 @@ int PickRandomGeneratorModel(float hour, bool weekend) {
 			cand.push_back({vd->id, vd->frequency}); sum += vd->frequency;
 		}
 		if (cand.empty() || sum <= 0) continue;
-		int w = (int)(rnd() * sum);
-		for (const C &c : cand) { if (c.frq >= w) return c.id; w -= c.frq; }
-		return cand.back().id;
+		int w = (int)(rnd() * sum), pick = cand.back().id;
+		for (const C &c : cand) { if (c.frq >= w) { pick = c.id; break; } w -= c.frq; }
+		// CLoadedCarGroup::PickRandomCar(bNotTooManyInTheWorld): reject a model that already has more than 2 live instances (m_nRefCount <= 2); retried up to 10 times
+		int live = 0;
+		for (const CarGen &o : gCarGens) if (o.clump && o.model == pick) live++;
+		if (live > 2) continue;
+		return pick;
 	}
 	return -1;
 }
@@ -1594,7 +1598,7 @@ void UpdateCars() {
 	static bool init = false;
 	if (!init) {
 		init = true; LoadCarcols(); LoadZones();
-		int shown = 0; for (const CarGen &g : gCarGens) if (g.randomModel && shown++ < 6 && g.pos.z < 100) fprintf(gLog, "random gen sample (%.0f,%.0f,%.0f)\n", g.pos.x, g.pos.y, g.pos.z);
+		int shown = 0; for (const CarGen &g : gCarGens) if (g.randomModel && g.pos.y < -300 && shown++ < 8 && g.pos.z < 100) fprintf(gLog, "random gen sample (%.0f,%.0f,%.0f)\n", g.pos.x, g.pos.y, g.pos.z);
 		size_t fixedN = 0; for (const CarGen &g : gCarGens) if (!g.randomModel) fixedN++;
 		fprintf(gLog, "car generators: %zu fixed model, %zu random model\n", fixedN, gCarGens.size() - fixedN);
 		// Run main.scm headless for 4 s of game time so INITIAL sets the zone population types.
