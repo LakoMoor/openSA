@@ -70,6 +70,9 @@ std::string gameDir;
 float centerX = 2495.0f, centerY = -1690.0f, loadRadius = 1000.0f; // cap on any model's draw distance
 rw::V3d camPos;
 int gDriveGen = -1; // index into gCarGens of the car the player drives, -1 = on foot
+float gCarPitch = 0.0f, gCarRoll = 0.0f; // radians, terrain attitude of the driven car
+float gCarHeading = 0.0f, gCarSpeed = 0.0f; // radians (counter-clockwise, like the generator angle), m/s along the car's forward axis
+const HandlingData *gDriveHandling = nullptr;
 float camYaw = 0.0f, camPitch = -12.0f; // degrees; yaw 0 looks along +Y
 FILE *gLog;
 
@@ -1246,6 +1249,75 @@ int FootBankForSurface(int mat) {
 	return 0;
 }
 
+// Engine of the driven car. ORIGINAL (CAEVehicleAudioEntity::ProcessPlayerVehicleEngine): the model's player bank (VehicleAudioSettings, EngineTable.inc copied from
+// the gta-reversed table at 0x860AF0, not re-read in the exe) has 3 sounds: 0 acceleration, 1 cruise (looped from its loop point), 2 deceleration, switched by gas pedal /
+// gear logic with the pitch coming from the gear RPM. DEVIATIONS: only the cruise loop is played, pitch = enginePitch * (0.55 + speed / top speed) clamped to 0.5..2.0
+// (no gears, no acceleration / deceleration sounds, no dummy-engine sounds for other cars); looped by a small streaming voice mixed at 22050 Hz; flat volume, no 3D.
+struct EngineVoice {
+	HWAVEOUT h = nullptr;
+	WAVEHDR hdr[4] = {};
+	std::vector<int16_t> buf[4];
+	bool primed[4] = {};
+	int bank = -999;
+	SfxSound snd;
+	double pos = 0.0;
+};
+EngineVoice gEngine;
+constexpr int kEngineChunk = 1024, kEngineRate = 22050;
+
+void StopEngine() {
+	if (!gEngine.h) return;
+	waveOutReset(gEngine.h);
+	for (int i = 0; i < 4; i++) if (gEngine.primed[i]) waveOutUnprepareHeader(gEngine.h, &gEngine.hdr[i], sizeof(WAVEHDR));
+	waveOutClose(gEngine.h);
+	gEngine = EngineVoice();
+}
+
+void UpdateEngine() {
+	static const struct { int type, bank; float pitch; } kEng[] = {
+#include "EngineTable.inc"
+	};
+	if (gDriveGen < 0 || getenv("SA_MUTE")) { StopEngine(); return; }
+	int idx = gCarGens[gDriveGen].model - 400;
+	if (idx < 0 || idx >= (int)(sizeof(kEng) / sizeof(kEng[0])) || kEng[idx].type == 0 || kEng[idx].bank <= 0) { StopEngine(); return; }
+	if (gEngine.bank != kEng[idx].bank) {
+		StopEngine();
+		SfxBank b;
+		if (!gSfx.loadBank(kEng[idx].bank, b) || b.sounds.size() < 2 || b.sounds[1].pcm.size() < 64) { gEngine.bank = kEng[idx].bank; return; }
+		gEngine.bank = kEng[idx].bank;
+		gEngine.snd = b.sounds[1];
+		WAVEFORMATEX fmt = {WAVE_FORMAT_PCM, 1, kEngineRate, kEngineRate * 2, 2, 16, 0};
+		if (waveOutOpen(&gEngine.h, WAVE_MAPPER, &fmt, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) { gEngine.h = nullptr; return; }
+		fprintf(gLog, "engine: model %d bank %d loop %d of %zu samples\n", gCarGens[gDriveGen].model, gEngine.bank, gEngine.snd.loopStart, gEngine.snd.pcm.size());
+	}
+	if (!gEngine.h) return;
+	float vmax = (gDriveHandling ? gDriveHandling->maxVelocity : 120.0f) / 3.6f;
+	float pitch = std::min(2.0f, std::max(0.5f, kEng[idx].pitch * (0.55f + std::fabs(gCarSpeed) / vmax)));
+	const SfxSound &s = gEngine.snd;
+	int64_t n = (int64_t)s.pcm.size(), loop = (s.loopStart > 0 && s.loopStart < n) ? s.loopStart : 0;
+	for (int i = 0; i < 4; i++) {
+		WAVEHDR &hd = gEngine.hdr[i];
+		if (gEngine.primed[i] && !(hd.dwFlags & WHDR_DONE)) continue;
+		if (gEngine.primed[i]) waveOutUnprepareHeader(gEngine.h, &hd, sizeof(hd));
+		gEngine.buf[i].resize(kEngineChunk);
+		double step = (double)s.rate / kEngineRate * pitch;
+		for (int k = 0; k < kEngineChunk; k++) {
+			int64_t i0 = (int64_t)gEngine.pos;
+			double fr = gEngine.pos - (double)i0;
+			int64_t i1 = i0 + 1 >= n ? loop : i0 + 1;
+			gEngine.buf[i][k] = (int16_t)((s.pcm[i0] * (1.0 - fr) + s.pcm[i1] * fr) * 0.7);
+			gEngine.pos += step;
+			if (gEngine.pos >= (double)n) gEngine.pos = (double)loop + (gEngine.pos - (double)n);
+		}
+		hd = {};
+		hd.lpData = (LPSTR)gEngine.buf[i].data();
+		hd.dwBufferLength = kEngineChunk * 2;
+		waveOutPrepareHeader(gEngine.h, &hd, sizeof(hd));
+		waveOutWrite(gEngine.h, &hd, sizeof(hd));
+		gEngine.primed[i] = true;
+	}
+}
+
 // Horn of the driven car: bank GENRL_HORN (74), sound id and pitch per model from the VehicleAudioSettings table (HornTable.inc, order = model id 400..631, copied from the
 // gta-reversed table at 0x860AF0; not re-read in the exe). Key H (ASSUMED binding). DEVIATIONS: the original loops the sound while the horn is on; here it is retriggered
 // when the previous play would have ended; flat volume, no 3D / doppler / roll-off; bikes (bell, id 0) play the plain sound without the bell fade-out.
@@ -1616,9 +1688,6 @@ const Zone *ZoneAt(float x, float y, float z) {
 const char *ZoneNameAt(float x, float y, float z) { const Zone *q = ZoneAt(x, y, z); return q ? q->name.c_str() : "-"; }
 
 HandlingCfg gHandling;
-float gCarPitch = 0.0f, gCarRoll = 0.0f; // radians, terrain attitude of the driven car
-float gCarHeading = 0.0f, gCarSpeed = 0.0f; // radians (counter-clockwise, like the generator angle), m/s along the car's forward axis
-const HandlingData *gDriveHandling = nullptr;
 
 // Driving PROTOTYPE, not CAutomobile::ProcessControl: kinematic bicycle model driven by handling.cfg (maxVelocity, engineAccel, brakeDecel, steeringLock).
 // DEVIATIONS: no suspension / tyre / engine-gear simulation, no collision with the world or other cars, no damage, no doors / enter animation; acceleration scale
@@ -2794,6 +2863,7 @@ void Idle(float dt) {
 	AnimatePed(dt);
 	UpdateFootsteps(dt);
 	UpdateHorn(dt);
+	UpdateEngine();
 	UpdateCars();
 	UpdateAmbientPeds(dt);
 	UpdateTraffic(dt);

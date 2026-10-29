@@ -13,4 +13,10 @@ int main(int argc, char **argv)
 		if (i < 8) { std::printf("bank %d: %zu sounds", i, bk.sounds.size()); for (size_t s = 0; s < bk.sounds.size() && s < 6; s++) std::printf(" [%zu smp @%d]", bk.sounds[s].pcm.size(), bk.sounds[s].rate); std::printf("\n"); }
 	}
 	std::printf("loaded %zu, failed %zu\n", ok, bad);
+	for (int id : {8, 84, 99}) {
+		SfxBank k;
+		if (!b.loadBank(id, k)) continue;
+		std::printf("engine bank %d: %zu sounds\n", id, k.sounds.size());
+		for (size_t i = 0; i < k.sounds.size() && i < 4; i++) std::printf("  s%zu %zu smp @%d loop %d\n", i, k.sounds[i].pcm.size(), k.sounds[i].rate, k.sounds[i].loopStart);
+	}
 }
