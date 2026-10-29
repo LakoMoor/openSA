@@ -1226,6 +1226,55 @@ void DrawMoon(float W, float H, float tanHalf) {
 	rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
 }
 
+// Rockstar logo: CClouds::Render_MaybeRenderRockstarLogo (0x713D2A): 11 "coronastar" sprites forming an R (offsets from the camera in world axes, base (100,0,10),
+// y -= STARS_Y*90, z += STARS_Z*80, the last two mirrored in x) plus a big star at (100,-90,10); visible 22:00..06:00 with a fade in the first and last hour, brightness
+// (1 - weather balance) * fade with per-frame random twinkle. DEVIATION: sprite half-size taken as CalcScreenCoors size * factor in 640x448 units scaled to the window;
+// the weather balance here includes only fog and cloud cover like the moon.
+void DrawRockstarLogo(float W, float H, float tanHalf) {
+	float mins = std::fmod(gGameMinutes, 1440.0f);
+	int hr = (int)(mins / 60.0f), mn = (int)std::fmod(mins, 60.0f);
+	if (!(hr >= 22 || hr < 6)) return;
+	unsigned t = hr == 22 ? (unsigned)mn : hr == 5 ? 60u - (unsigned)mn : 60u;
+	if (t == 0) return;
+	float colorB = 255.0f * (float)t / 60.0f;
+	static rw::Texture *tex = ParticleTex("coronastar");
+	if (!tex) return;
+	static const float kY[9] = {0.00f, 0.05f, 0.13f, 0.40f, 0.70f, 0.60f, 0.27f, 0.55f, 0.75f}, kZ[9] = {0.00f, 0.45f, 0.90f, 1.00f, 0.85f, 0.52f, 0.48f, 0.35f, 0.20f},
+	                         kS[9] = {1.00f, 1.40f, 0.90f, 1.00f, 0.60f, 1.50f, 1.30f, 1.00f, 0.80f};
+	rw::Matrix *mt = &gCamera->getFrame()->matrix;
+	float aspect = W / H, fovDeg = 2.0f * std::atan(tanHalf * aspect) * 180.0f / 3.14159265f, recipZ = 1.0f / gCamera->nearPlane;
+	rw::SetRenderStatePtr(rw::TEXTURERASTER, tex->raster);
+	rw::SetRenderState(rw::VERTEXALPHA, 1);
+	rw::SetRenderState(rw::SRCBLEND, rw::BLENDONE);
+	rw::SetRenderState(rw::DESTBLEND, rw::BLENDONE);
+	auto sprite = [&](float dx, float dy, float dz, float sizeMul, float bright) {
+		float cx = dx * mt->right.x + dy * mt->right.y + dz * mt->right.z, cy = dx * mt->up.x + dy * mt->up.y + dz * mt->up.z,
+		      cz = dx * mt->at.x + dy * mt->at.y + dz * mt->at.z;
+		if (cz <= gCamera->nearPlane + 1.0f) return;
+		float sx = W * 0.5f + cx / cz / (tanHalf * aspect) * W * 0.5f, sy = H * 0.5f - cy / cz / tanHalf * H * 0.5f;
+		float half = 640.0f / cz * 70.0f / fovDeg * sizeMul * (W / 640.0f);
+		uint8_t c = (uint8_t)std::max(0.0f, std::min(255.0f, bright));
+		rw::RWDEVICE::Im2DVertex v[4];
+		float xs[4] = {sx - half, sx + half, sx - half, sx + half}, ys[4] = {sy - half, sy - half, sy + half, sy + half}, us[4] = {0, 1, 0, 1}, vs[4] = {0, 0, 1, 1};
+		for (int i = 0; i < 4; i++) {
+			v[i].setScreenX(xs[i]); v[i].setScreenY(ys[i]); v[i].setScreenZ(rw::im2d::GetNearZ());
+			v[i].setCameraZ(gCamera->nearPlane); v[i].setRecipCameraZ(recipZ);
+			v[i].setColor(c, c, c, 255);
+			v[i].setU(us[i], recipZ); v[i].setV(vs[i], recipZ);
+		}
+		rw::uint16 idx[6] = {0, 1, 2, 1, 3, 2};
+		rw::im2d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, v, 4, idx, 6);
+	};
+	for (int i = 0; i < 11; i++) {
+		int p = i % 9;
+		float dx = i >= 9 ? -100.0f : 100.0f, dy = 0.0f - kY[p] * 90.0f, dz = 10.0f + kZ[p] * 80.0f;
+		float cc = colorB * (1.0f - (float)(rand() % 32) * 0.015f);
+		sprite(dx, dy, dz, kS[p] * 0.8f, cc);
+	}
+	sprite(100.0f, -90.0f, 10.0f, 5.0f, colorB * (1.0f - ((float)(rand() % 128) * 0.0015625f + 0.5f)));
+	rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
+}
+
 // Sky gradient: timecyc sky-top colour at the top of the screen blending to sky-bottom at the horizon (the clear colour fills below it).
 // DEVIATION: the original (CClouds::Render) also draws the sun, moon, cloud layers and low-level clouds; none of that is implemented here.
 void DrawSky() {
@@ -1292,6 +1341,7 @@ void DrawSky() {
 	}
 	strip(yPrev, greyCol, H + 1.0f, greyCol); // DEVIATION: below -0.3 the original shows the grey back wall / clear colour; filled with the grey here
 	DrawMoon(W, H, tanHalf);
+	DrawRockstarLogo(W, H, tanHalf);
 	DrawLowClouds(W, H, tanHalf);
 	DrawSunDisc(W, H, tanHalf);
 	rw::SetRenderState(rw::SRCBLEND, rw::BLENDSRCALPHA);
