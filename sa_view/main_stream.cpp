@@ -1137,7 +1137,8 @@ bool LoadCj() {
 		return e && img.Read(*e, out);
 	};
 	std::vector<rw::TexDictionary *> txds;
-	for (const char *t : {"player_torso.txd", "player_face.txd", "player_legs.txd", "player_feet.txd"}) {
+	// outfit recorded from main.scm (GIVE_PLAYER_CLOTHES_OUTSIDE_SHOP): VEST/VEST torso, JEANSDENIM/JEANS legs, SNEAKERBINCBLK/SNEAKER feet, PLAYER_FACE/HEAD head
+	for (const char *t : {"player_torso.txd", "player_face.txd", "player_legs.txd", "player_feet.txd", "vest.txd", "jeansdenim.txd", "sneakerbincblk.txd"}) {
 		std::vector<uint8_t> b;
 		if (!read(t, b)) return false;
 		if (rw::TexDictionary *d = ReadTxd(b)) {
@@ -1148,7 +1149,15 @@ bool LoadCj() {
 	bool ok = true;
 	// part -> texture slot as in CClothesBuilder::CreateSkinnedClump (0x5A69D0, BODY_PART_TEX_NAMES: torso, head, hands -> torso, legs, feet): hands share the torso skin.
 	// ASSUMED: which base texture inside the player_*.txd backs each slot (face for head, foot for feet) - the original composes them in ConstructTextures (0x5A6040, not ported).
-	struct { const char *dff, *tex; } parts[] = {{"head.dff", "face"}, {"hands.dff", "torso"}, {"torso.dff", "torso"}, {"legs.dff", "legs"}, {"feet.dff", "foot"}};
+	if (getenv("SA_BARECJ")) {
+	struct { const char *dff, *tex; } bare[] = {{"head.dff", "face"}, {"hands.dff", "torso"}, {"torso.dff", "torso"}, {"legs.dff", "legs"}, {"feet.dff", "foot"}};
+	for (auto &pt : bare) { std::vector<uint8_t> b; if (!read(pt.dff, b) || !AddPedPart(b, txds, pt.dff, pt.tex)) ok = false; }
+	return ok;
+	}
+	if (txds.size() == 7) std::rotate(txds.begin(), txds.begin() + 4, txds.end()); // clothes txds first: jeansdenim.txd also has a texture called "legs"
+	for (size_t i = 0; i < 3; i++) { FORLIST(lnk, txds[i]->textures) fprintf(gLog, "clothes txd %zu texture %s\n", i, rw::Texture::fromDict(lnk)->name); }
+	// clothes models replace the base torso / legs / feet geometry (CClothesBuilder::ConstructGeometryArray); texture names assumed to be the item's own txd texture
+	struct { const char *dff, *tex; } parts[] = {{"head.dff", "face"}, {"hands.dff", "torso"}, {"vest.dff", "vest"}, {"jeans.dff", "legs"}, {"sneaker.dff", "sneakerbincblk"}};
 	for (auto &pt : parts) {
 		std::vector<uint8_t> b;
 		if (!read(pt.dff, b) || !AddPedPart(b, txds, pt.dff, pt.tex)) ok = false;
@@ -2020,6 +2029,14 @@ void UpdateCars() {
 		size_t fixedN = 0; for (const CarGen &g : gCarGens) if (!g.randomModel) fixedN++;
 		fprintf(gLog, "car generators: %zu fixed model, %zu random model\n", fixedN, gCarGens.size() - fixedN);
 		// Run main.scm headless for 4 s of game time so INITIAL sets the zone population types.
+		// GIVE_PLAYER_CLOTHES (0x0784) / GIVE_PLAYER_CLOTHES_OUTSIDE_SHOP (0x087B): the script chooses CJ's outfit; recorded here, the fall-through handler still runs
+		for (uint16_t op : {(uint16_t)0x0784, (uint16_t)0x087B})
+			gVM.setHandler(op, [op](ScriptVM &vm, ScmThread &t, std::vector<ScmArg> &args) {
+				std::string txt;
+				for (const ScmArg &a : args) { txt += a.str.empty() ? std::to_string(vm.getI(t, a)) : "'" + a.str + "'"; txt += " "; }
+				fprintf(gLog, "script: clothes op %04X args: %s\n", op, txt.c_str());
+				return false;
+			});
 		if (gVM.load(gameDir + "/data/script/main.scm")) {
 			for (int i = 0, stable = 0; i < 200 && stable < 5; i++) { size_t before = gVM.zonePopType.size(); gVM.tick(20); stable = (before == gVM.zonePopType.size() && before > 0) ? stable + 1 : 0; }
 			fprintf(gLog, "script: %zu threads, %llu commands, %zu zone population types\n", gVM.threadCount(), (unsigned long long)gVM.commandsRun, gVM.zonePopType.size());
