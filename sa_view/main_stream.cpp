@@ -1265,15 +1265,17 @@ void DrawWater() {
 		fprintf(gLog, "water.dat: %zu polygons (%s)\n", gWater.size(), ok ? "ok" : "failed");
 	}
 	// CWaterLevel::RenderWater: two flat layers textured with "waterclear256" (particle.txd), UV = world xy / 25 and / 12.5 m (GetWaterLayerTexInfo),
-	// colour = timecyc water rgb * 0.577, layer alphas 160 and 90 (0x8D3808, exe-read). DEVIATION: the UV scroll (TextureShift*, animated by
+	// colour = raw timecyc water rgb (0xC2116C is filled from 0xB7C508..14 at 0x6EFAFF; gta-reversed's 0.577 factor is not applied), layer alphas derived from the timecyc water alpha as the exe does each frame (the static 160/90 at 0x8D3808 are overwritten). DEVIATION: the UV scroll (TextureShift*, animated by
 	// CWaterLevel::Update), the wave/vertex animation on the water grid, flow, foam and the timecyc water alpha are not implemented; the water
 	// polygons are drawn as stored in water.dat instead of the original's 2x2 m renderer grid.
 	rw::Texture *tex = ParticleTex("waterclear256");
 	if (tex) { tex->setAddressU(rw::Texture::WRAP); tex->setAddressV(rw::Texture::WRAP); }
-	auto c8 = [](float v) { return (rw::uint8)std::min(255.0f, v * 0.577f); };
+	auto c8 = [](float v) { return (rw::uint8)std::min(255.0f, v); };
 	for (int layer = 0; layer < 2; layer++) {
 		const float scale = layer == 0 ? 25.0f : 12.5f;
-		const rw::uint8 alpha = layer == 0 ? 160 : 90;
+		// layer alphas are rewritten every frame at 0x6EFB0A..: a = int(timecyc water alpha * 0.5); layer 1 (0x8D380C) = a, layer 0 (0x8D3808) = min(255, (a << 8) / (256 - a))
+		const int wa = (int)(gTc.water[3] * 0.5f);
+		const rw::uint8 alpha = (rw::uint8)(layer == 0 ? std::min(255, (wa << 8) / std::max(1, 256 - wa)) : wa);
 		// UV shift (RenderWater 0x6EF673): layer 0 U = acc0U, V = cos((t & 0x1FFF) * 0.00076699) * 0.024 + acc0V; layer 1 U = sin((t & 0xFFF) * 0.0015339808) * K * 0.08
 		// + acc1U, V = cos(..) * K * 0.08 + acc1V. The accumulators advance per tick by wind * 0.04 * (0.04 / 0.08 for layer 0 / 1) and wrap at 1; wind chases the
 		// flow of the water vertex nearest the camera (0x6E9D75, int8 flow / 64) at 0.001 per tick. DEVIATION: K (0xC812E8, runtime-set, 0 in the file) is taken as 0,
