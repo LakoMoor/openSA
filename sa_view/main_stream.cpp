@@ -3190,7 +3190,7 @@ void Idle(float dt) {
 			int best = -1; float bd = getenv("SA_AUTODRIVE") ? 25600.0f : 25.0f;
 			for (size_t i = 0; i < gCarGens.size(); i++) {
 				if (!gCarGens[i].clump) continue;
-				if (getenv("SA_AUTODRIVE")) { const sa::VehicleDef *vd = gW.ide.FindVehicle(gCarGens[i].model); if (!vd || vd->type != "car") continue; } // test aid: four-wheeled cars only
+				if (getenv("SA_AUTODRIVE")) { const sa::VehicleDef *vd = gW.ide.FindVehicle(gCarGens[i].model); if (!vd || vd->type != "car") continue; if (getenv("SA_AUTOMODEL") && gCarGens[i].model != atoi(getenv("SA_AUTOMODEL"))) continue; } // test aid: four-wheeled cars only
 				float dx = gCarGens[i].pos.x - camPos.x, dy = gCarGens[i].pos.y - camPos.y, d2 = dx * dx + dy * dy;
 				if (d2 < bd) { bd = d2; best = (int)i; }
 			}
