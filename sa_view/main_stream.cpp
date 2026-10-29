@@ -755,14 +755,14 @@ void UpdateWalk(float dt) {
 	// swimming ped keeps swimming while depth > 1.55 (hysteresis follows from the equilibrium, not from CTaskSimpleSwim's m_fSwimStopTime,
 	// whose exit threshold is NOT reversed). Height follows CTaskSimpleSwim::ProcessSwimmingResistance (0x68A1D0, constants read in the exe:
 	// 0.55 tread, 0.4 breast, 0.2 crawl, 0.65 surface test, 0.1 per tick clamp). The 0.4/0.2 height blends follow the live breast/crawl clip
-	// amounts (SwimSubmergeZ). The approach is velocity based as in the original (formula from gta-reversed).
+	// amounts (SwimSubmergeZ). The approach is velocity based as in the original.
 	float wl;
 	// without ground collision below (open sea has none), a ped over water falls under gravity until the same rule above applies
 	bool inWater = WaterLevelAt(camPos.x, camPos.y, wl);
 	gSwimming = inWater && (ground ? (camPos.z < wl - 0.6f || (gSwimming && wl - gz > 1.55f)) : camPos.z < wl - 0.6f);
 	if (!gSwimming) gSwimVelZ = 0.0f;
 	if (gSwimming) {
-		// CTaskSimpleSwim::ProcessSwimmingResistance tail (gta-reversed, not re-read in the exe): the vertical move speed (units per 1/50 s tick)
+		// CTaskSimpleSwim::ProcessSwimmingResistance tail (read in the exe at 0x68A7CE..0x68A8C3: dz/ts clamped to +-0.1*ts, change per tick +-0.02*ts): the vertical move speed (units per 1/50 s tick)
 		// is pulled toward dz / ts, limited to +-0.1 * ts, with the change per tick limited to +-dt (seconds); the position advances by speed * ts.
 		float ts = dt * 50.0f, dz = wl - SwimSubmergeZ() - camPos.z;
 		float want = std::max(-0.1f * ts, std::min(0.1f * ts, dz / ts)) - gSwimVelZ;
