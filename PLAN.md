@@ -9,7 +9,7 @@ Written down from the README status table and the project notes; it is the plan 
 | 3 | Ambient traffic along car path links | done, with deviations (constant speed, guessed lane offset, no lights/lane changes/reactions) |
 | 4a | Audio: SFX bank parser | done (710 banks parse) |
 | 4b | Audio: footsteps (surface banks, swimming, ambient peds) | done, run-tested only, not heard |
-| 5 | Audio: vehicle engine / horn / doors | not started |
+| 5 | Audio: vehicle engine / horn / doors | partial (horn only, run-tested) |
 | 6 | Audio: weapons, speech, ambience, radio streams | not started |
 | 7 | Water: waves, foam, flow shading, seam, brightness | not started |
 | 8 | Particles (sandstorm, splashes, rain haze) | not started |

@@ -1200,13 +1200,14 @@ bool gSfxReady = false;
 struct WaveVoice { HWAVEOUT h = nullptr; WAVEHDR hdr = {}; std::vector<int16_t> buf; bool used = false; };
 WaveVoice gVoices[8];
 
-void PlaySfx(const SfxSound &s, float vol) {
+void PlaySfx(const SfxSound &s, float vol, float pitch = 1.0f) {
 	for (WaveVoice &v : gVoices) {
 		if (v.used && !(v.hdr.dwFlags & WHDR_DONE)) continue;
 		if (v.used) waveOutUnprepareHeader(v.h, &v.hdr, sizeof(v.hdr));
 		if (v.h) waveOutClose(v.h);
 		v.h = nullptr; v.used = false;
-		WAVEFORMATEX fmt = {WAVE_FORMAT_PCM, 1, (DWORD)s.rate, (DWORD)s.rate * 2, 2, 16, 0};
+		DWORD rate = (DWORD)(s.rate * pitch);
+		WAVEFORMATEX fmt = {WAVE_FORMAT_PCM, 1, rate, rate * 2, 2, 16, 0};
 		if (waveOutOpen(&v.h, WAVE_MAPPER, &fmt, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) { v.h = nullptr; return; }
 		v.buf.resize(s.pcm.size());
 		for (size_t i = 0; i < s.pcm.size(); i++) v.buf[i] = (int16_t)(s.pcm[i] * vol);
@@ -1243,6 +1244,32 @@ int FootBankForSurface(int mat) {
 	if (v[8]) return 5;
 	if (v[6]) return 3;
 	return 0;
+}
+
+// Horn of the driven car: bank GENRL_HORN (74), sound id and pitch per model from the VehicleAudioSettings table (HornTable.inc, order = model id 400..631, copied from the
+// gta-reversed table at 0x860AF0; not re-read in the exe). Key H (ASSUMED binding). DEVIATIONS: the original loops the sound while the horn is on; here it is retriggered
+// when the previous play would have ended; flat volume, no 3D / doppler / roll-off; bikes (bell, id 0) play the plain sound without the bell fade-out.
+void UpdateHorn(float dt) {
+	static const struct { int type; float pitch; } kHorn[] = {
+#include "HornTable.inc"
+	};
+	static SfxBank bank;
+	static bool loaded = false;
+	static float timer = 0.0f;
+	static float up = 0.0f;
+	up += dt;
+	bool hornKey = sk::keys['H'] || (getenv("SA_AUTOHORN") && up > 14.0f); // SA_AUTOHORN: test aid, presses H from 14 s
+	if (gDriveGen < 0 || !hornKey || getenv("SA_MUTE")) { timer = 0.0f; return; }
+	if (!loaded) { loaded = true; gSfx.loadBank(74, bank); fprintf(gLog, "horn bank: %zu sounds\n", bank.sounds.size()); }
+	timer -= dt;
+	if (timer > 0.0f) return;
+	int idx = gCarGens[gDriveGen].model - 400;
+	if (idx < 0 || idx >= (int)(sizeof(kHorn) / sizeof(kHorn[0])) || kHorn[idx].type < 0 || kHorn[idx].type >= (int)bank.sounds.size()) return;
+	const SfxSound &snd = bank.sounds[kHorn[idx].type];
+	float pitch = kHorn[idx].pitch;
+	timer = (float)snd.pcm.size() / (snd.rate * pitch);
+	PlaySfx(snd, 0.8f, pitch);
+	fprintf(gLog, "horn: model %d sound %d pitch %.2f (%.2f s)\n", gCarGens[gDriveGen].model, kHorn[idx].type, pitch, timer);
 }
 
 void UpdateFootsteps(float dt) {
@@ -2749,6 +2776,7 @@ void Idle(float dt) {
 	UpdatePed();
 	AnimatePed(dt);
 	UpdateFootsteps(dt);
+	UpdateHorn(dt);
 	UpdateCars();
 	UpdateAmbientPeds(dt);
 	UpdateTraffic(dt);
