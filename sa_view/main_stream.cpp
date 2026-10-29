@@ -1059,6 +1059,8 @@ bool AttachPlugins() {
 
 // Sun: projected along the vector to the sun (verified formula), filled square in the timecyc core/corona colours.
 // DEVIATION: the real sun/corona are textured sprites from particle.txd with sizes from CClouds/CCoronas; sizes here are guesses.
+rw::Texture *ParticleTex(const char *name);
+
 void DrawSunDisc(float W, float H, float tanHalf) {
 	rw::Matrix *m = &gCamera->getFrame()->matrix;
 	rw::V3d d = gToSun;
@@ -1069,26 +1071,30 @@ void DrawSunDisc(float W, float H, float tanHalf) {
 	float sx = W * 0.5f + cx / cz / (tanHalf * aspect) * W * 0.5f, sy = H * 0.5f - cy / cz / tanHalf * H * 0.5f;
 	auto quad = [&](float half, const float *col, uint8_t alpha) {
 		rw::RWDEVICE::Im2DVertex v[4];
-		float xs[4] = {sx - half, sx + half, sx - half, sx + half}, ys[4] = {sy - half, sy - half, sy + half, sy + half};
+		float xs[4] = {sx - half, sx + half, sx - half, sx + half}, ys[4] = {sy - half, sy - half, sy + half, sy + half}, us[4] = {0, 1, 0, 1}, vs[4] = {0, 0, 1, 1};
 		float recipZ = 1.0f / gCamera->nearPlane;
 		for (int i = 0; i < 4; i++) {
 			v[i].setScreenX(xs[i]); v[i].setScreenY(ys[i]); v[i].setScreenZ(rw::im2d::GetNearZ());
 			v[i].setCameraZ(gCamera->nearPlane); v[i].setRecipCameraZ(recipZ);
 			v[i].setColor((uint8_t)col[0], (uint8_t)col[1], (uint8_t)col[2], alpha);
-			v[i].setU(0, recipZ); v[i].setV(0, recipZ);
+			v[i].setU(us[i], recipZ); v[i].setV(vs[i], recipZ);
 		}
 		rw::uint16 idx[6] = {0, 1, 2, 1, 3, 2};
 		rw::im2d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, v, 4, idx, 6);
 	};
+	// coronas are drawn additively (CCoronas::Render: SRCBLEND ONE / DESTBLEND ONE) with the "coronastar" sprite (CORONATYPE_SHINYSTAR)
+	static rw::Texture *star = ParticleTex("coronastar");
+	rw::SetRenderStatePtr(rw::TEXTURERASTER, star ? star->raster : nil);
 	rw::SetRenderState(rw::VERTEXALPHA, 1);
-	rw::SetRenderState(rw::SRCBLEND, rw::BLENDSRCALPHA);
-	rw::SetRenderState(rw::DESTBLEND, rw::BLENDINVSRCALPHA);
+	rw::SetRenderState(rw::SRCBLEND, rw::BLENDONE);
+	rw::SetRenderState(rw::DESTBLEND, rw::BLENDONE);
 	// CCoronas::DoSunAndMoon (0x6FC5A0): corona 1 (sun core colour) has size sunSize*2.7335, corona 2 (corona colour) sunSize*6, both placed at
-	// farClip*0.95 along the vector to the sun. DEVIATION: the sizes are taken as half-widths and drawn as flat squares (the original uses the
-	// particle.txd shiny-star / sun-flare textures, line-of-sight fading and flare sprites), alpha values are guesses.
+	// farClip*0.95 along the vector to the sun. DEVIATION: the sizes are taken as half-widths and drawn with the coronastar sprite (the original also fades
+	// by line of sight in CCoronas::Render and draws the SUN flare sprites), alpha values are guesses.
 	float dist = std::max(gFarClip, 1.0f) * 0.95f, pxPerUnit = H * 0.5f / (tanHalf * dist);
 	quad(gTc.sunSize * 6.0f * pxPerUnit, gTc.sunCorona, 90);
 	quad(gTc.sunSize * 2.7335f * pxPerUnit, gTc.sunCore, 255);
+	rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
 }
 
 // Low clouds: CClouds::Render_RenderLowClouds (0x7138xx..): 12 additive "cloud1" sprites at camera + offset*(800,800,60) + (0,0,40) with z not
@@ -1096,6 +1102,26 @@ void DrawSunDisc(float W, float H, float tanHalf) {
 // balance = max(foggyness, cloudCoverage, extraSunnyness) from the weather pair (CWeather::Update 0x72B850 flags, blended by the hour fraction).
 // DEVIATION: sprite extents are read as half-sizes in the original 640x448 screen units and scaled to the window; the roll is 0; the
 // rainbow, moon and Rockstar-logo parts of CClouds::Render are not drawn.
+rw::TexDictionary *gParticleTxd = nullptr;
+bool gParticleTried = false;
+
+rw::Texture *ParticleTex(const char *name) {
+	if (!gParticleTried) {
+		gParticleTried = true;
+		std::ifstream f(gameDir + "/models/particle.txd", std::ios::binary);
+		std::vector<uint8_t> b((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+		if (!b.empty()) gParticleTxd = ReadTxd(b);
+		if (gParticleTxd) FORLIST(lnk, gParticleTxd->textures) rw::Texture::fromDict(lnk)->setFilter(rw::Texture::LINEAR);
+		fprintf(gLog, "particle.txd: %s\n", gParticleTxd ? "loaded" : "missing");
+	}
+	if (!gParticleTxd) return nullptr;
+	FORLIST(lnk, gParticleTxd->textures) {
+		rw::Texture *t = rw::Texture::fromDict(lnk);
+		if (Lower(t->name) == name) return t;
+	}
+	return nullptr;
+}
+
 rw::Texture *gCloudTex = nullptr;
 bool gCloudTried = false;
 
@@ -1116,15 +1142,7 @@ float WeatherCloudBalance() {
 void DrawLowClouds(float W, float H, float tanHalf) {
 	if (!gCloudTried) {
 		gCloudTried = true;
-		std::ifstream f(gameDir + "/models/particle.txd", std::ios::binary);
-		std::vector<uint8_t> b((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-		if (rw::TexDictionary *d = b.empty() ? nil : ReadTxd(b)) {
-			FORLIST(lnk, d->textures) {
-				rw::Texture *t = rw::Texture::fromDict(lnk);
-				if (Lower(t->name) == "cloud1") gCloudTex = t;
-			}
-		}
-		fprintf(gLog, "low clouds: cloud1 %s\n", gCloudTex ? "loaded" : "missing");
+		gCloudTex = ParticleTex("cloud1");
 	}
 	if (!gCloudTex) return;
 	float keep = 1.0f - WeatherCloudBalance();
@@ -1228,6 +1246,8 @@ void DrawSky() {
 	strip(yPrev, greyCol, H + 1.0f, greyCol); // DEVIATION: below -0.3 the original shows the grey back wall / clear colour; filled with the grey here
 	DrawLowClouds(W, H, tanHalf);
 	DrawSunDisc(W, H, tanHalf);
+	rw::SetRenderState(rw::SRCBLEND, rw::BLENDSRCALPHA);
+	rw::SetRenderState(rw::DESTBLEND, rw::BLENDINVSRCALPHA);
 	rw::SetRenderState(rw::ZTESTENABLE, 1);
 	rw::SetRenderState(rw::ZWRITEENABLE, 1);
 	rw::SetRenderState(rw::CULLMODE, rw::CULLBACK);
