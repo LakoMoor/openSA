@@ -1512,8 +1512,19 @@ void DriveUpdate(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 	g.pos.x += -std::sin(gCarHeading) * v * dt;
 	g.pos.y += std::cos(gCarHeading) * v * dt;
 	g.angle = gCarHeading;
+	auto *ownCol = gInsts[g.inst].col; gInsts[g.inst].col = nil; // the car's own collision proxy must not count as ground / obstacle
+	// World collision: five spheres along the car axis pushed out of static geometry and other parked cars (PushOutSphere). DEVIATION: not CCollision::ProcessColModels
+	// against the car's own box/spheres; the body is approximated as 5 x r=0.9 m spheres, impact just scales the speed.
+	{
+		float fx = -std::sin(gCarHeading), fy = std::cos(gCarHeading), moved = 0.0f;
+		for (int k = -2; k <= 2; k++) {
+			rw::V3d c = {g.pos.x + fx * 0.9f * k, g.pos.y + fy * 0.9f * k, g.pos.z + 0.9f};
+			rw::V3d c0 = c;
+			if (PushOutSphere(c, 0.9f)) { g.pos.x += c.x - c0.x; g.pos.y += c.y - c0.y; moved += std::fabs(c.x - c0.x) + std::fabs(c.y - c0.y); }
+		}
+		if (moved > 0.02f) gCarSpeed *= 0.7f;
+	}
 	float gz;
-	auto *ownCol = gInsts[g.inst].col; gInsts[g.inst].col = nil; // the car's own collision proxy must not count as ground
 	if (GroundHeight(g.pos.x, g.pos.y, g.pos.z + 3.0f, 10.0f, gz)) g.pos.z = gz - (vp ? vp->minZ : 0.0f);
 	gInsts[g.inst].col = ownCol;
 	if (g.clump) {
