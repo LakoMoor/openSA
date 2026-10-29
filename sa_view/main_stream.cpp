@@ -246,6 +246,28 @@ void ApplyTimeOfDay() {
 	gWeatherPrevFrac = frac;
 	gTc = gWeatherForced ? gTimecyc.Sample(gWeather, hour)
 	                     : sa::Timecyc::Lerp(gTimecyc.Sample(gOldWeather, hour), gTimecyc.Sample(gWeather, hour), frac);
+	// Lightning (CWeather::Update 0x72B96E, rolled once per frame like the original): only while both old and new weather are rainy.
+	// A flash forces sky top/bottom, fog and ambient to white (app_game.cpp / app_light.cpp). DEVIATION: no thunder sound, pad shake, or lightning bolt/cloud flash.
+	{
+		static bool burst = false, flash = false;
+		static unsigned frame = 0, start = 0, lastChange = 0;
+		static auto t0l = std::chrono::steady_clock::now();
+		unsigned nowMs = (unsigned)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0l).count();
+		frame++;
+		auto pct = [](float p) { return (float)rand() / (float)RAND_MAX * 100.0f < p; };
+		bool rainy = (gOldWeather == 8 || gOldWeather == 16) && (gWeather == 8 || gWeather == 16);
+		if (rainy) {
+			if (burst) {
+				if (pct(9.4f)) { burst = false; flash = false; }
+				else if (nowMs - lastChange > 50) { bool was = flash; flash = rand() & 1; if (flash != was) lastChange = nowMs; }
+			} else if (pct(0.6f)) { start = frame; lastChange = nowMs; burst = true; flash = true; }
+			else flash = false;
+		} else { burst = flash = false; }
+		if (getenv("SA_LIGHTNING")) flash = true; // test aid
+		if (flash && gTc.ok) {
+			for (int i = 0; i < 3; i++) gTc.skyTop[i] = gTc.skyBottom[i] = gTc.ambient[i] = gTc.ambientObj[i] = 255.0f;
+		}
+	}
 	if (gTc.ok) {
 		gFarClip = std::min(gTc.farClip, 1000.0f);
 		Background = {(uint8_t)gTc.skyBottom[0], (uint8_t)gTc.skyBottom[1], (uint8_t)gTc.skyBottom[2], 255};
