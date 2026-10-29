@@ -601,7 +601,7 @@ rw::V3d ClosestOnTri(const rw::V3d &p, const float *A, const float *B, const flo
 // Pushes a sphere out of the collision geometry of nearby instances; only the horizontal part of the push is applied and
 // near-horizontal (walkable) surfaces are ignored. Returns true if anything pushed.
 bool gWalk = false, gGrounded = true, gSwimming = false;
-struct Contact { rw::V3d n; float depth; };
+struct Contact { rw::V3d n; float depth; int piece; };
 bool PushOutSphere(rw::V3d &c, float r, std::vector<Contact> *out = nullptr) {
 	bool pushed = false;
 	for (int cx = CellOf(c.x - 3); cx <= CellOf(c.x + 3); cx++)
@@ -624,7 +624,7 @@ bool PushOutSphere(rw::V3d &c, float r, std::vector<Contact> *out = nullptr) {
 					if (dist2 >= r * r || dist2 < 1e-12f) continue;
 					rw::V3d wd = QuatRotate(in.rot, d, false); // world-space push direction
 					float dist = std::sqrt(dist2), nz = std::fabs(wd.z) / dist;
-					if (out) { out->push_back({{wd.x / dist, wd.y / dist, wd.z / dist}, r - dist}); pushed = true; continue; }
+					if (out) { out->push_back({{wd.x / dist, wd.y / dist, wd.z / dist}, r - dist, 0}); pushed = true; continue; }
 					if (nz > 0.7f) continue; // floor or ceiling, not a wall
 					float k = (r - dist) / dist;
 					c.x += wd.x * k; c.y += wd.y * k;
@@ -638,7 +638,7 @@ bool PushOutSphere(rw::V3d &c, float r, std::vector<Contact> *out = nullptr) {
 					if (dist2 >= r * r || dist2 < 1e-12f) continue;
 					rw::V3d wd = QuatRotate(in.rot, d, false);
 					float dist = std::sqrt(dist2);
-					if (out) { out->push_back({{wd.x / dist, wd.y / dist, wd.z / dist}, r - dist}); pushed = true; continue; }
+					if (out) { out->push_back({{wd.x / dist, wd.y / dist, wd.z / dist}, r - dist, 0}); pushed = true; continue; }
 					if (std::fabs(wd.z) / dist > 0.7f) continue;
 					float k = (r - dist) / dist;
 					c.x += wd.x * k; c.y += wd.y * k;
@@ -661,17 +661,27 @@ void CollideWalker() {
 	constexpr float kRadius = 0.35f;
 	const float heights[3] = {-0.2f, 0.2f, 0.6f}; // relative to the ped origin
 	std::vector<Contact> contacts;
-	for (float h : heights) {
-		rw::V3d c = {camPos.x, camPos.y, camPos.z + h};
+	for (int pi = 0; pi < 3; pi++) {
+		size_t first = contacts.size();
+		rw::V3d c = {camPos.x, camPos.y, camPos.z + heights[pi]};
 		PushOutSphere(c, kRadius, &contacts);
+		for (size_t k = first; k < contacts.size(); k++) contacts[k].piece = pi; // sphere index = CColPoint pieceTypeA
 	}
+	static float prevX = camPos.x, prevY = camPos.y;
+	float velX = camPos.x - prevX, velY = camPos.y - prevY;
 	rw::V3d shift = {0, 0, 0};
 	float maxDepth = 0.0f;
 	int n = 0;
 	for (Contact &ct : contacts) {
 		if (ct.depth <= 0.0f) continue;
 		rw::V3d v = ct.n;
-		if (gGrounded) {
+		if (gGrounded && v.z < -0.99f && ct.piece == 2) {
+			// CPed::ProcessEntityCollision 0x5E2530, second contact loop: the top sphere (piece 2) against a flat ceiling (normal z < -0.99): push back against the
+			// horizontal velocity (-1 / max(|v|, 0.001) * v) and drop the ped by 0.05. DEVIATION: ped state 0/1 test of the exe skipped; velocity is last frame's displacement.
+			float hz = std::max(std::sqrt(velX * velX + velY * velY), 0.001f);
+			v.x = -velX / hz; v.y = -velY / hz;
+			camPos.z -= 0.05f;
+		} else if (gGrounded) {
 			float hz = std::sqrt(v.x * v.x + v.y * v.y);
 			if (hz != 0.0f) { v.x /= hz; v.y /= hz; }
 			float l = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
@@ -683,7 +693,7 @@ void CollideWalker() {
 	}
 	static int dbgN = 0;
 	if (getenv("SA_COLDEBUG") && (dbgN++ % 30 == 0)) fprintf(gLog, "collide: contacts=%zu used=%d at (%.1f,%.1f,%.1f)\n", contacts.size(), n, camPos.x, camPos.y, camPos.z);
-	if (!n) return;
+	if (!n) { prevX = camPos.x; prevY = camPos.y; return; }
 	float mag = std::sqrt(shift.x * shift.x + shift.y * shift.y + shift.z * shift.z);
 	if (mag > 1.0f) { shift.x /= mag; shift.y /= mag; shift.z /= mag; }
 	float dx, dy;
@@ -696,6 +706,7 @@ void CollideWalker() {
 		dx = shift.x * maxDepth * 0.75f; dy = shift.y * maxDepth * 0.75f;
 	}
 	camPos.x += dx; camPos.y += dy;
+	prevX = camPos.x; prevY = camPos.y;
 }
 
 // Walk mode (G): the camera is a point 1.7 m above the ground with gravity. DEVIATION: the original uses a ped with a collision
