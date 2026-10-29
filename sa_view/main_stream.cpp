@@ -1009,7 +1009,8 @@ bool LoadCj() {
 		}
 	}
 	bool ok = true;
-	// ASSUMED part -> texture mapping (head: face, hands share the torso skin texture)
+	// part -> texture slot as in CClothesBuilder::CreateSkinnedClump (0x5A69D0, BODY_PART_TEX_NAMES: torso, head, hands -> torso, legs, feet): hands share the torso skin.
+	// ASSUMED: which base texture inside the player_*.txd backs each slot (face for head, foot for feet) - the original composes them in ConstructTextures (0x5A6040, not ported).
 	struct { const char *dff, *tex; } parts[] = {{"head.dff", "face"}, {"hands.dff", "torso"}, {"torso.dff", "torso"}, {"legs.dff", "legs"}, {"feet.dff", "foot"}};
 	for (auto &pt : parts) {
 		std::vector<uint8_t> b;
