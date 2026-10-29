@@ -19,4 +19,11 @@ int main(int argc, char **argv)
 		std::printf("engine bank %d: %zu sounds\n", id, k.sounds.size());
 		for (size_t i = 0; i < k.sounds.size() && i < 4; i++) std::printf("  s%zu %zu smp @%d loop %d\n", i, k.sounds[i].pcm.size(), k.sounds[i].rate, k.sounds[i].loopStart);
 	}
+	{
+		SfxBank w;
+		if (b.loadBank(143, w)) {
+			std::printf("weapons bank 143: %zu sounds%c", w.sounds.size(), 10);
+			for (size_t i = 0; i < w.sounds.size() && i < 10; i++) std::printf("  s%zu %zu smp @%d%c", i, w.sounds[i].pcm.size(), w.sounds[i].rate, 10);
+		}
+	}
 }
