@@ -1300,6 +1300,7 @@ void DrawWater() {
 		rw::SetRenderState(rw::SRCBLEND, rw::BLENDSRCALPHA);
 		rw::SetRenderState(rw::DESTBLEND, rw::BLENDINVSRCALPHA);
 		rw::SetRenderState(rw::ZWRITEENABLE, 0);
+		rw::SetRenderState(rw::FOGENABLE, 1); // RenderWater (0x6EF673) sets render state 14 (fog) to 1
 		rw::SetRenderState(rw::CULLMODE, rw::CULLNONE);
 		rw::im3d::Transform(verts.data(), (rw::int32)verts.size(), nil, rw::im3d::EVERYTHING);
 		rw::im3d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, idx.data(), (rw::int32)idx.size());
