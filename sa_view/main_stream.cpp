@@ -347,7 +347,7 @@ void LoadColBounds() {
 }
 
 // IPL car generators (placement of parked vehicles, see UpdateCars)
-struct CarGen { rw::V3d pos; float angle; int model, c1, c2; rw::Clump *clump = nil; bool tried = false; int inst = -1; bool ignorePop = false; bool randomModel = false; };
+struct CarGen { rw::V3d pos; float angle; int model, c1, c2; rw::Clump *clump = nil; bool tried = false; int inst = -1; bool ignorePop = false; bool randomModel = false; bool force = false; };
 std::vector<CarGen> gCarGens;
 
 void CollectPlacements() {
@@ -404,7 +404,7 @@ void CollectPlacements() {
 			if (it != localToGlobal.end()) parent = &it->second;
 		}
 		for (auto &cg : b.carGens)
-			if (cg.modelId == -1) { gCarGens.push_back({{cg.pos[0], cg.pos[1], cg.pos[2]}, cg.angle, -1, cg.color1, cg.color2}); gCarGens.back().ignorePop = (cg.flags & 2) != 0; gCarGens.back().randomModel = true; } else if (cg.modelId >= 400 && gW.ide.FindVehicle(cg.modelId)) { gCarGens.push_back({{cg.pos[0], cg.pos[1], cg.pos[2]}, cg.angle, cg.modelId, cg.color1, cg.color2}); gCarGens.back().ignorePop = (cg.flags & 2) != 0; }
+			if (cg.modelId == -1) { gCarGens.push_back({{cg.pos[0], cg.pos[1], cg.pos[2]}, cg.angle, -1, cg.color1, cg.color2}); gCarGens.back().ignorePop = (cg.flags & 2) != 0; gCarGens.back().randomModel = true; gCarGens.back().force = (cg.flags & 1) != 0; } else if (cg.modelId >= 400 && gW.ide.FindVehicle(cg.modelId)) { gCarGens.push_back({{cg.pos[0], cg.pos[1], cg.pos[2]}, cg.angle, cg.modelId, cg.color1, cg.color2}); gCarGens.back().ignorePop = (cg.flags & 2) != 0; gCarGens.back().force = (cg.flags & 1) != 0; }
 		for (auto &i : b.insts) {
 			int g = add(i.modelId, i.pos[0], i.pos[1], i.pos[2], i.rot, i.flags & 0xFF);
 			if (g >= 0 && parent && i.lodIndex >= 0 && i.lodIndex < (int)parent->size() && (*parent)[i.lodIndex] >= 0)
@@ -1506,9 +1506,15 @@ int PickRandomGeneratorModel(float hour, bool weekend) {
 	return -1;
 }
 
+int gFramesSinceStart = 0; // stands in for CTheCarGenerators::GenerateEvenIfPlayerIsCloseCounter, which the original raises while loading the scene (ASSUMED, not re-read in the exe)
+
 void UpdateCars() {
+	gFramesSinceStart++;
 	// CCarGenerator::DoInternalProcessing: unless the generator ignores the population limit, no new parked car while NumParkedCars >= 5 (10 between 21:00 and 07:00).
 	// DEVIATION: NumParkedCars here counts only the cars shown by this viewer (the original also counts random-model ones and applies delays / probability).
+	static float prevCamX = camPos.x, prevCamY = camPos.y;
+	float camVelX = camPos.x - prevCamX, camVelY = camPos.y - prevCamY;
+	prevCamX = camPos.x; prevCamY = camPos.y;
 	float hour = std::fmod(gGameMinutes, 1440.0f) / 60.0f;
 	int parkedLimit = (hour >= 21.0f || hour < 7.0f) ? 10 : 5, parked = 0;
 	for (const CarGen &g : gCarGens) if (g.clump && !g.ignorePop) parked++;
@@ -1528,7 +1534,12 @@ void UpdateCars() {
 	for (CarGen &g : gCarGens) {
 		float dx = g.pos.x - camPos.x, dy = g.pos.y - camPos.y, d2 = dx * dx + dy * dy;
 		if (g.clump && d2 > (kCarSpawnRange + 50.0f) * (kCarSpawnRange + 50.0f)) { gWorld->removeClump(g.clump); g.clump->destroy(); g.clump = nil; g.tried = false; gInsts[g.inst].col = nil; continue; }
-		if (d2 >= kCarSpawnRange * kCarSpawnRange || g.clump || g.tried) continue;
+		if (g.clump || g.tried) continue;
+		// CCarGenerator::CheckIfWithinRangeOfAnyPlayers (gta-reversed, exe 0x6F2F40): |dz| <= 50, within 160 m (camera generation multiplier 1), and unless the
+		// generator is high priority (IPL flag bit 0) only in the outer ring (>= 140 m) while the player is not moving away from it, i.e. cars appear at the edge of view.
+		// DEVIATION: the player is the camera here; the in-area (interior) check and the generator-owned bWaitUntilFarFromPlayer flag are not modelled.
+		if (std::fabs(g.pos.z - camPos.z) > 50.0f || d2 >= 160.0f * 160.0f) continue;
+		if (!g.force && gFramesSinceStart > 150 && !(d2 >= 140.0f * 140.0f && (camVelX * -dx + camVelY * -dy) <= 0.0f)) continue;
 		if (!g.ignorePop && parked >= parkedLimit) continue;
 		if (g.model < 0) {
 			g.model = PickRandomGeneratorModel(hour, false);
