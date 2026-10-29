@@ -30,7 +30,17 @@ struct BnryInst {              // 40 bytes
 	int32_t lodIndex;          // -1 = none; otherwise index into the PARENT IPL (X_streamN -> X), see CIplStore::LoadIpl
 	                           // (verified: 4648/4648 refs in gta3.img are < parent text IPL inst count)
 };
+
+struct BnryCarGen {            // 0x30 bytes (CFileCarGenerator, gta-reversed CarGenerator.h; size confirmed 0x30)
+	float pos[3];
+	float angle;               // radians (values like -1.5708, 3.1416 in gta3.img)
+	int32_t modelId;           // -1 = random model from the car group of the zone
+	int32_t color1, color2;    // -1 = random
+	uint32_t flags;            // bit0 force spawn, bit1 ignore population limit
+	int32_t alarmChance, doorLockChance, minDelay, maxDelay;
+};
 #pragma pack(pop)
+static_assert(sizeof(BnryCarGen) == 0x30, "bnry cargen");
 
 static_assert(sizeof(BnryHeader) == 0x4C, "bnry header");
 static_assert(sizeof(BnryInst) == 40, "bnry inst");
@@ -38,6 +48,7 @@ static_assert(sizeof(BnryInst) == 40, "bnry inst");
 struct BinaryIpl {
 	uint32_t numCarGens = 0;
 	std::vector<BnryInst> insts;
+	std::vector<BnryCarGen> carGens;
 };
 
 // Parses and bounds-checks a "bnry" buffer. Returns false (with err set) on malformed data.

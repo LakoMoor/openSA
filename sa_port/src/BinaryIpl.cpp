@@ -26,6 +26,11 @@ bool ParseBinaryIpl(const uint8_t *data, size_t size, BinaryIpl &out, const char
 		*err = "car generator table out of range";
 		return false;
 	}
+	if (numCars > 0) {
+		if (uint64_t(h.offCarGens) + uint64_t(numCars) * sizeof(BnryCarGen) > size) { *err = "car generator table out of range"; return false; }
+		out.carGens.resize(numCars);
+		memcpy(out.carGens.data(), data + h.offCarGens, numCars * sizeof(BnryCarGen));
+	}
 	return true;
 }
 

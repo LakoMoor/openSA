@@ -29,6 +29,8 @@ int main(int argc, char **argv) {
 	for (auto &d : dat)
 		if (d.kind == "IDE") ide.LoadFile(Join(root, d.arg));
 
+	size_t cgRandom = 0, cgFixed = 0, cgBad = 0, cgOut = 0;
+	std::set<int> cgBadIds;
 	size_t files = 0, parseFail = 0, insts = 0, noDef = 0, badQuat = 0, badPos = 0, badLod = 0, interior = 0, carGens = 0;
 	std::set<int> noDefIds;
 	for (const char *imgName : {"models/gta3.img", "models/gta_int.img"}) {
@@ -47,6 +49,12 @@ int main(int argc, char **argv) {
 			}
 			files++;
 			carGens += ipl.numCarGens;
+			for (auto &g : ipl.carGens) {
+				if (g.modelId < 0) cgRandom++;
+				else if (ide.FindVehicle(g.modelId)) cgFixed++;
+				else { cgBad++; cgBadIds.insert(g.modelId); }
+				if (std::fabs(g.pos[0]) > 4000 || std::fabs(g.pos[1]) > 4000 || std::fabs(g.angle) > 720) cgOut++;
+			}
 			for (auto &i : ipl.insts) {
 				insts++;
 				if (!ide.HasModel(i.modelId)) { noDef++; noDefIds.insert(i.modelId); }
@@ -61,6 +69,8 @@ int main(int argc, char **argv) {
 	}
 	printf("binary IPL files parsed=%zu failed=%zu\n", files, parseFail);
 	printf("instances=%zu, car generators=%zu, with interior byte set=%zu\n", insts, carGens, interior);
+	printf("car generators: fixed vehicle model=%zu random(-1)=%zu unknown model=%zu (%zu ids) out of range=%zu\n", cgFixed, cgRandom, cgBad, cgBadIds.size(), cgOut);
+	for (int id : cgBadIds) printf("  unknown car gen model id %d\n", id);
 	printf("checks: no IDE object def=%zu (%zu ids), non-unit quaternion=%zu, position out of +-4000=%zu, bad lod index=%zu\n",
 	       noDef, noDefIds.size(), badQuat, badPos, badLod);
 	return 0;

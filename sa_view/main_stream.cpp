@@ -344,6 +344,10 @@ void LoadColBounds() {
 	fprintf(gLog, "COL bounds: %zu models from %zu files\n", gColBounds.size(), files);
 }
 
+// IPL car generators (placement of parked vehicles, see UpdateCars)
+struct CarGen { rw::V3d pos; float angle; int model, c1, c2; rw::Clump *clump = nil; bool tried = false; };
+std::vector<CarGen> gCarGens;
+
 void CollectPlacements() {
 	LoadColBounds();
 	std::unordered_map<std::string, std::vector<int>> localToGlobal; // lower-case IPL name -> global idx or -1
@@ -397,6 +401,8 @@ void CollectPlacements() {
 			auto it = localToGlobal.find(base.substr(0, us));
 			if (it != localToGlobal.end()) parent = &it->second;
 		}
+		for (auto &cg : b.carGens)
+			if (cg.modelId >= 400 && gW.ide.FindVehicle(cg.modelId)) gCarGens.push_back({{cg.pos[0], cg.pos[1], cg.pos[2]}, cg.angle, cg.modelId, cg.color1, cg.color2});
 		for (auto &i : b.insts) {
 			int g = add(i.modelId, i.pos[0], i.pos[1], i.pos[2], i.rot, i.flags & 0xFF);
 			if (g >= 0 && parent && i.lodIndex >= 0 && i.lodIndex < (int)parent->size() && (*parent)[i.lodIndex] >= 0)
@@ -1204,6 +1210,204 @@ void Terminate3D() {
 	sk::TerminateRW();
 }
 
+// SA stores each frame's name in a 0x253F2FE extension chunk; librw has no plugin for it (needed to find the wheel dummies of vehicles).
+struct NodeName { char name[24]; };
+int nodeNameOffset = -1;
+constexpr rw::uint32 ID_NODENAME = 0x253F2FE;
+void *CreateNodeName(void *obj, rw::int32 off, rw::int32) { PLUGINOFFSET(NodeName, obj, off)->name[0] = 0; return obj; }
+void *DestroyNodeName(void *obj, rw::int32, rw::int32) { return obj; }
+void *CopyNodeName(void *dst, void *src, rw::int32 off, rw::int32) {
+	*PLUGINOFFSET(NodeName, dst, off) = *PLUGINOFFSET(NodeName, src, off);
+	return dst;
+}
+rw::Stream *ReadNodeName(rw::Stream *s, rw::int32 len, void *obj, rw::int32 off, rw::int32) {
+	NodeName *n = PLUGINOFFSET(NodeName, obj, off);
+	char tmp[256] = {};
+	s->read8(tmp, len < 255 ? len : 255);
+	if (len > 255) s->seek(len - 255);
+	strncpy(n->name, tmp, 23);
+	n->name[23] = 0;
+	return s;
+}
+rw::Stream *WriteNodeName(rw::Stream *s, rw::int32, void *, rw::int32, rw::int32) { return s; }
+rw::int32 SizeNodeName(void *, rw::int32, rw::int32) { return 0; }
+const char *FrameName(rw::Frame *f) { return nodeNameOffset >= 0 && f ? PLUGINOFFSET(NodeName, f, nodeNameOffset)->name : ""; }
+
+// Parked vehicles from the IPL car generators. DEVIATIONS: every generator with a fixed vehicle model within kCarSpawnRange is shown as a static,
+// intact car (the original spawns through CCarGenerator::Process: probability, delays, population and zone rules, alarms, door locks, a random
+// model for modelId -1, vehicle physics); colours are the first carcols.dat pair of the model (generator colour indices are not applied); the stock
+// wheel is wheel_gn1 (IDE wheelId is -1 for every car, the original choice is not verified); the car sits on the COL ground below the generator at the
+// lowest wheel / body vertex.
+struct VehProto { rw::Clump *clump = nil; float minZ = 0; };
+std::unordered_map<int, VehProto> gVehProtos;
+std::vector<rw::RGBA> gCarPalette;
+std::unordered_map<std::string, std::vector<int>> gCarPairs; // lower-case model -> first colour pair (4 indices)
+constexpr float kCarSpawnRange = 150.0f;
+
+void LoadCarcols() {
+	std::ifstream f(gameDir + "/data/carcols.dat");
+	std::string line, section;
+	while (std::getline(f, line)) {
+		size_t h = line.find('#');
+		if (h != std::string::npos) line.resize(h);
+		for (char &c : line) if (c == ',' || c == '\r' || c == '\t') c = ' ';
+		char a[64];
+		if (sscanf(line.c_str(), "%63s", a) != 1) continue;
+		std::string w = Lower(a);
+		if (w == "col" || w == "car" || w == "car4") { section = w; continue; }
+		if (w == "end") { section.clear(); continue; }
+		if (section == "col") {
+			int r, g, b;
+			if (sscanf(line.c_str(), "%d %d %d", &r, &g, &b) == 3) gCarPalette.push_back({(rw::uint8)r, (rw::uint8)g, (rw::uint8)b, 255});
+		} else if ((section == "car" || section == "car4") && !gCarPairs.count(w)) {
+			int n[4] = {0, 0, 0, 0};
+			int cnt = sscanf(line.c_str() + line.find(a) + strlen(a), "%d %d %d %d", &n[0], &n[1], &n[2], &n[3]);
+			if (cnt >= 2) gCarPairs[w] = {n[0], n[1], cnt > 2 ? n[2] : 0, cnt > 3 ? n[3] : 0};
+		}
+	}
+	fprintf(gLog, "carcols: %zu colours, %zu models\n", gCarPalette.size(), gCarPairs.size());
+}
+
+rw::Frame *FindNamedFrame(rw::Frame *root, const char *name) {
+	if (!root) return nil;
+	if (!_stricmp(FrameName(root), name)) return root;
+	for (rw::Frame *c = root->child; c; c = c->next)
+		if (rw::Frame *r = FindNamedFrame(c, name)) return r;
+	return nil;
+}
+
+VehProto *GetVehicleProto(int id) {
+	auto it = gVehProtos.find(id);
+	if (it != gVehProtos.end()) return it->second.clump ? &it->second : nullptr;
+	VehProto &vp = gVehProtos[id];
+	const sa::VehicleDef *v = gW.ide.FindVehicle(id);
+	if (!v) return nullptr;
+	const sa::ImgV2 &gta3 = gW.archives[0];
+	std::string name = Lower(v->model);
+	const sa::ImgEntry *dffE = gta3.Find(name + ".dff"), *txdE = gta3.Find(Lower(v->txd) + ".txd");
+	if (!dffE) return nullptr;
+	std::vector<rw::TexDictionary *> txds;
+	auto addTxd = [&](const std::vector<uint8_t> &b) {
+		if (rw::TexDictionary *d = ReadTxd(b)) {
+			FORLIST(lnk, d->textures) rw::Texture::fromDict(lnk)->setFilter(rw::Texture::LINEARMIPLINEAR);
+			txds.push_back(d);
+		}
+	};
+	std::vector<uint8_t> b;
+	if (txdE && gta3.Read(*txdE, b)) addTxd(b);
+	for (const char *g : {"/models/generic/vehicle.txd", "/models/generic/wheels.txd"}) {
+		std::ifstream f(gameDir + g, std::ios::binary);
+		std::vector<uint8_t> gb((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+		if (!gb.empty()) addTxd(gb);
+	}
+	gChain = txds;
+	rw::TexDictionary::setCurrent(nil);
+	rw::Texture::findCB = FindInChain;
+	std::vector<uint8_t> dff;
+	if (!gta3.Read(*dffE, dff)) return nullptr;
+	rw::StreamMemory sm;
+	sm.open(dff.data(), (rw::uint32)dff.size());
+	rw::Clump *c = rw::findChunk(&sm, rw::ID_CLUMP, nil, nil) ? rw::Clump::streamRead(&sm) : nil;
+	sm.close();
+	if (!c) return nullptr;
+	// paint: SA marks the four paintable materials with fixed colours
+	static const rw::RGBA kMarkers[4] = {{60, 255, 0, 255}, {255, 0, 175, 255}, {0, 255, 255, 255}, {255, 255, 0, 255}};
+	rw::RGBA cols[4];
+	auto pr = gCarPairs.find(name);
+	for (int i = 0; i < 4; i++) {
+		int idx = pr != gCarPairs.end() ? pr->second[i] : 0;
+		cols[i] = idx < (int)gCarPalette.size() ? gCarPalette[idx] : rw::RGBA{128, 128, 128, 255};
+	}
+	FORLIST(lnk, c->atomics) {
+		rw::Atomic *a = rw::Atomic::fromClump(lnk);
+		if (!a->geometry) continue;
+		for (int i = 0; i < a->geometry->matList.numMaterials; i++) {
+			rw::Material *m = a->geometry->matList.materials[i];
+			rw::MatFX::setEffects(m, rw::MatFX::NOTHING);
+			for (int k = 0; k < 4; k++)
+				if (m->color.red == kMarkers[k].red && m->color.green == kMarkers[k].green && m->color.blue == kMarkers[k].blue) { m->color = cols[k]; m->color.alpha = 255; }
+		}
+	}
+	// hide the placeholder wheel, damaged-part variants and the very-low-detail body (intact, close-up state)
+	FORLIST(lnk, c->atomics) {
+		rw::Atomic *a = rw::Atomic::fromClump(lnk);
+		const char *n = FrameName(a->getFrame());
+		size_t nl = strlen(n);
+		if (!_stricmp(n, "wheel") || (nl > 4 && (!_stricmp(n + nl - 4, "_dam") || !_stricmp(n + nl - 4, "_vlo")))) a->object.object.flags &= ~rw::Atomic::RENDER;
+	}
+	// wheels
+	{
+		std::ifstream f(gameDir + "/models/generic/wheels.dff", std::ios::binary);
+		std::vector<uint8_t> wb((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+		rw::StreamMemory ws;
+		ws.open(wb.data(), (rw::uint32)wb.size());
+		rw::Clump *wc = rw::findChunk(&ws, rw::ID_CLUMP, nil, nil) ? rw::Clump::streamRead(&ws) : nil;
+		ws.close();
+		rw::Atomic *proto = nil, *firstWheel = nil;
+		if (wc)
+			FORLIST(lnk, wc->atomics) {
+				rw::Atomic *a = rw::Atomic::fromClump(lnk);
+				const char *n = FrameName(a->getFrame());
+				if (!_stricmp(n, "wheel_gn1")) proto = a;
+				if (!firstWheel && !_strnicmp(n, "wheel_", 6)) firstWheel = a;
+			}
+		if (!proto) proto = firstWheel;
+		float scale = v->wheelScaleFront > 0 ? v->wheelScaleFront : 0.7f;
+		struct { const char *dummy; bool right; } slots[4] = {{"wheel_lf_dummy", false}, {"wheel_rf_dummy", true}, {"wheel_lb_dummy", false}, {"wheel_rb_dummy", true}};
+		for (auto &sl : slots) {
+			rw::Frame *d = FindNamedFrame(c->getFrame(), sl.dummy);
+			if (!d || !proto) continue;
+			rw::Atomic *a = proto->clone();
+			rw::Frame *fr = rw::Frame::create();
+			rw::V3d sc = {scale, scale, scale}, z = {0, 0, 1};
+			fr->scale(&sc, rw::COMBINEREPLACE);
+			if (sl.right) fr->rotate(&z, 180.0f, rw::COMBINEPOSTCONCAT);
+			d->addChild(fr);
+			a->setFrame(fr);
+			c->addAtomic(a);
+		}
+	}
+	c->getFrame()->updateObjects();
+	float minZ = 1e9f;
+	FORLIST(lnk, c->atomics) {
+		rw::Atomic *a = rw::Atomic::fromClump(lnk);
+		if (!(a->object.object.flags & rw::Atomic::RENDER) || !a->geometry) continue;
+		rw::Matrix *ltm = a->getFrame()->getLTM();
+		rw::Geometry *g = a->geometry;
+		for (int i = 0; i < g->numVertices; i++) {
+			rw::V3d p = g->morphTargets[0].vertices[i], q;
+			rw::V3d::transformPoints(&q, &p, 1, ltm);
+			minZ = std::min(minZ, q.z);
+		}
+	}
+	vp.clump = c;
+	vp.minZ = minZ < 1e8f ? minZ : -0.5f;
+	fprintf(gLog, "vehicle %s loaded (min z %.2f)\n", name.c_str(), vp.minZ);
+	return &vp;
+}
+
+void UpdateCars() {
+	static bool init = false;
+	if (!init) { init = true; LoadCarcols(); fprintf(gLog, "car generators with a fixed vehicle model: %zu\n", gCarGens.size()); }
+	for (CarGen &g : gCarGens) {
+		float dx = g.pos.x - camPos.x, dy = g.pos.y - camPos.y, d2 = dx * dx + dy * dy;
+		if (g.clump && d2 > (kCarSpawnRange + 50.0f) * (kCarSpawnRange + 50.0f)) { gWorld->removeClump(g.clump); g.clump->destroy(); g.clump = nil; g.tried = false; continue; }
+		if (d2 >= kCarSpawnRange * kCarSpawnRange || g.clump || g.tried) continue;
+		VehProto *vp = GetVehicleProto(g.model);
+		if (!vp) { g.tried = true; continue; }
+		float gz;
+		if (!GroundHeight(g.pos.x, g.pos.y, g.pos.z + 3.0f, 10.0f, gz)) continue; // no collision loaded here yet: retry next frame
+		rw::Clump *c = vp->clump->clone();
+		rw::V3d zax = {0, 0, 1};
+		rw::Frame *f = c->getFrame();
+		f->rotate(&zax, g.angle * 57.29578f, rw::COMBINEREPLACE); // generator angle is stored in radians
+		rw::V3d p = {g.pos.x, g.pos.y, gz - vp->minZ};
+		f->translate(&p, rw::COMBINEPOSTCONCAT);
+		gWorld->addClump(c);
+		g.clump = c;
+	}
+}
+
 bool AttachPlugins() {
 	rw::registerMeshPlugin();
 	rw::registerNativeDataPlugin();
@@ -1212,6 +1416,8 @@ bool AttachPlugins() {
 	rw::registerSkinPlugin();
 	rw::registerUserDataPlugin();
 	rw::registerHAnimPlugin();
+	nodeNameOffset = rw::Frame::registerPlugin(sizeof(NodeName), ID_NODENAME, CreateNodeName, DestroyNodeName, CopyNodeName);
+	rw::Frame::registerPluginStream(ID_NODENAME, ReadNodeName, WriteNodeName, SizeNodeName);
 	rw::registerMatFXPlugin();
 	rw::registerUVAnimPlugin();
 	gExtraVertOffset = rw::Geometry::registerPlugin(sizeof(ExtraVertColour), ID_EXTRAVERTCOLOUR, CreateExtraVert, DestroyExtraVert, nil);
@@ -1775,6 +1981,7 @@ void Idle(float dt) {
 	UpdateStreaming(now);
 	UpdatePed();
 	AnimatePed(dt);
+	UpdateCars();
 	UpdateCamera();
 	gCamera->clear(&Background, rw::Camera::CLEARIMAGE | rw::Camera::CLEARZ);
 	gCamera->beginUpdate();
