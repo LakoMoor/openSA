@@ -13,7 +13,7 @@ int main(int argc, char **argv)
 	vp::CarPhysics car;
 	car.init(h, wp, 0.7f);
 	car.place({0, 0, 0.5f}, 0);
-	vp::GroundFn flat = [](float, float, float zFrom, float zTo, vp::GroundHit &o) { if (zFrom < 0.0f || zTo > 0.0f) return false; o.z = 0.0f; return true; };
+	vp::GroundFn flat = [](float, float, float zFrom, float zTo, vp::GroundHit &o) { if (zFrom < 0.0f || zTo > 0.0f) return false; o.z = 0.0f; o.adhesion = 4.5f; return true; };
 	vp::Input in;
 	in.gas = 1.0f;
 	std::printf("%s: mass %.0f cfg top %.0f km/h\n", id, h.mass, h.maxVelocity);

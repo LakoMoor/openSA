@@ -1695,9 +1695,43 @@ HandlingCfg gHandling;
 // (engineAccel * 0.14 m/s^2) and the 2.8 m wheelbase are fitted guesses, not read from the exe.
 // Rigid-body driving (default; SA_KINEMATIC=1 selects the old kinematic prototype): VehiclePhysics.cpp, a port of CPhysical / CAutomobile suspension / CVehicle::ProcessWheel /
 // cTransmission. Wheel positions come from the model's wheel dummies, wheel size from vehicles.ide. DEVIATIONS: wheel rays are vertical probes against the COL ground
-// (not lines along the suspension axis against all geometry), the ground normal comes from 3 samples, tyre adhesion is 1.0 on every surface (surfinfo.dat adhesion groups not
-// ported), world collision is the old 5-sphere push-out with a speed loss (no CPhysical::ProcessCollision impulses), steering input smoothing 0.1 / tick is assumed,
+// (not lines along the suspension axis against all geometry), the ground normal comes from 3 samples, tyre adhesion from surface.dat/surfinfo.dat assuming row index = COL surface id (no wet multiplier / TYRE_GRIP), world collision is the old 5-sphere push-out with a speed loss (no CPhysical::ProcessCollision impulses), steering input smoothing 0.1 / tick is assumed,
 // no wheel rotation / steering visuals, no damage.
+// Tyre adhesion by surface: data/surface.dat (lower-triangle matrix of adhesion groups) + data/surfinfo.dat (group per surface). SurfaceInfos_c::GetAdhesiveLimit
+// = limits[ground group][RUBBER] for a wheel. ASSUMPTION: the surfinfo.dat row index is the COL surface id.
+std::vector<int> gSurfGroup;
+float gAdhLimits[6][6];
+bool gAdhLoaded = false;
+void LoadSurfaces(const std::string &gameDir) {
+	std::map<std::string, int> grp = {{"RUBBER", 0}, {"HARD", 1}, {"ROAD", 2}, {"LOOSE", 3}, {"SAND", 4}, {"WET", 5}};
+	memset(gAdhLimits, 0, sizeof gAdhLimits);
+	std::ifstream f(gameDir + "/data/surface.dat");
+	std::string line;
+	int row = 0;
+	while (std::getline(f, line) && row < 6) {
+		if (line.empty() || line[0] == ';' || line[0] == '#') continue;
+		std::istringstream ss(line);
+		std::string name; ss >> name;
+		for (int c = 0; c <= row; c++) { std::string t; if (!(ss >> t)) break; float v = t[0] == '-' ? 0.0f : (float)atof(t.c_str()); gAdhLimits[row][c] = gAdhLimits[c][row] = v; }
+		row++;
+	}
+	std::ifstream g(gameDir + "/data/surfinfo.dat");
+	while (std::getline(g, line)) {
+		if (line.empty() || line[0] == '#') continue;
+		std::istringstream ss(line);
+		std::string name, group; ss >> name >> group;
+		auto it = grp.find(group);
+		gSurfGroup.push_back(it == grp.end() ? 2 : it->second);
+	}
+	gAdhLoaded = row == 6 && !gSurfGroup.empty();
+	fprintf(gLog, "surfaces: %d surfinfo rows, road/rubber %.1f, loose/rubber %.1f\n", (int)gSurfGroup.size(), gAdhLimits[2][0], gAdhLimits[3][0]);
+}
+float SurfaceAdhesion(int surf) {
+	if (!gAdhLoaded) return 1.0f;
+	int g = surf >= 0 && surf < (int)gSurfGroup.size() ? gSurfGroup[surf] : 2;
+	return gAdhLimits[g][0];
+}
+
 vp::CarPhysics gPhys;
 bool gPhysActive = false;
 
@@ -1751,11 +1785,12 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 	auto ground = [&](float x, float y, float zFrom, float zTo, vp::GroundHit &out) {
 		float z, zx, zy;
 		if (!GroundHeight(x, y, zFrom, std::max(0.1f, zFrom - zTo), z)) return false;
+			int mat = gGroundMaterial;
 		if (!GroundHeight(x + 0.3f, y, z + 0.5f, 1.0f, zx)) zx = z;
 		if (!GroundHeight(x, y + 0.3f, z + 0.5f, 1.0f, zy)) zy = z;
 		out.z = z;
 		out.normal = vp::norm({-(zx - z) / 0.3f, -(zy - z) / 0.3f, 1.0f});
-		out.adhesion = 1.0f;
+		out.adhesion = SurfaceAdhesion(mat);
 		return true;
 	};
 	gPhys.step(dt * 50.0f, in, ground);
@@ -1922,6 +1957,7 @@ void UpdateCars() {
 			fprintf(gLog, "script: %zu threads, %llu commands, %zu zone population types\n", gVM.threadCount(), (unsigned long long)gVM.commandsRun, gVM.zonePopType.size());
 		}
 		if (!gHandling.load(gameDir + "/data/handling.cfg")) fprintf(gLog, "handling.cfg failed to load\n");
+		LoadSurfaces(gameDir);
 		if (!gPop.load(gameDir + "/data/popcycle.dat", gameDir + "/data/cargrp.dat")) fprintf(gLog, "popcycle.dat / cargrp.dat failed to load\n");
 	}
 	for (CarGen &g : gCarGens) {

@@ -17,7 +17,7 @@ Written down from the README status table and the project notes; it is the plan 
 | 8 | Particles (sandstorm, splashes, rain haze) | not started |
 | 9 | CJ clothes (`ConstructTextures`, clothes builder) | not started |
 | 10 | More script commands / missions (most commands are stubs) | partial |
-| 11 | Real vehicle physics (CAutomobile) | partial (suspension + tyre + transmission core ported from reVC/gta-reversed, flat-ground numbers sane; no collision impulses, no damage, no surface adhesion) |
+| 11 | Real vehicle physics (CAutomobile) | partial (suspension + tyre + transmission core ported from reVC/gta-reversed, flat-ground numbers sane; surface adhesion from surface.dat/surfinfo.dat done; no collision impulses, no damage) |
 | 12 | Car streaming for generator models (`m_AppropriateLoadedCars`) | not started |
 
 Steps 5-12 are each a subsystem of weeks of work in the original; they are not expected to finish in a single session.

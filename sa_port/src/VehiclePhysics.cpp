@@ -22,7 +22,7 @@ void CarPhysics::init(const HandlingData &h, const V3 wp[4], float wsize) {
 	brakeDecel = h.brakeDecel / (50.0f * 50.0f); brakeBias = h.brakeBias;
 	steeringLock = h.steeringLock * 0.0174533f;
 	suspForce = h.suspForce; suspDamping = h.suspDamping; suspUpper = h.suspUpper; suspLower = h.suspLower; suspBias = h.suspBias; suspAntiDive = h.suspAntiDive;
-	engineAccel = h.engineAccel / (50.0f * 50.0f);
+	engineAccel = h.engineAccel * 0.4f / (50.0f * 50.0f);   // tHandlingData::InitFromData scales the engine acceleration by 0.4 before ConvertDataToGameUnits
 	maxVelocity = h.maxVelocity * 0.277778f / 50.0f;
 	float accelLimit = engineAccel / 6.0f, v = maxVelocity;
 	while (v > 0.0f) {
@@ -188,7 +188,7 @@ void CarPhysics::step(float ticks, const Input &in, const GroundFn &ground) {
 		float fs = forwardSpeed();
 		float target = in.steer * steeringLock;
 		if (std::fabs(fs) > 0.01f) {
-			float t = 1.0f * (tractionMult / 250.0f * 0.25f) * 4.0f * 4.0f / (fs * fs);
+			float t = 4.5f * (tractionMult / 250.0f * 0.25f) * 4.0f * 4.0f / (fs * fs);
 			float f = std::min(t, 1.0f);
 			f = std::asin(f) / steeringLock;
 			if (f < 1.0f) target *= f;
@@ -272,7 +272,10 @@ void CarPhysics::step(float ticks, const Input &in, const GroundFn &ground) {
 				float bBias = front ? 2.0f * brakeBias : 2.0f - 2.0f * brakeBias, tBias = front ? 2.0f * tractionBias : 2.0f - 2.0f * tractionBias;
 				float wheelBrake = brake * bBias;
 				if (!front && in.handbrake) wheelBrake = 20000.0f * ts;
-				processWheel(wf, wr, contactSpeed[i], contactPoint[i], wheelsOnGround, thrust, wheelBrake, adh[i] * traction * tBias * ts, i, gas);
+				// player vehicle: adhesion scaled by the wheel load (CAutomobile wheel loop, gta-reversed Automobile.cpp:4645)
+				float sBias = front ? 2.0f * suspBias : 2.0f - 2.0f * suspBias;
+				float load = std::min(sBias * suspForce * 4.0f * (1.0f - compression[i]), 2.0f);
+				processWheel(wf, wr, contactSpeed[i], contactPoint[i], wheelsOnGround, thrust, wheelBrake, adh[i] * traction * tBias * load * ts, i, gas);
 			}
 		}
 
