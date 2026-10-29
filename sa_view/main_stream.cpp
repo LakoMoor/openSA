@@ -1485,7 +1485,7 @@ void DrawRain(float dt, unsigned tms) {
 		for (int v = 0; v < 2; v++) {
 			rw::RWDEVICE::Im3DVertex iv;
 			iv.setX((float)px[s] + ox); iv.setY((float)py[s] + oy); iv.setZ((float)pz[s] + oz2[v]);
-			iv.setColor(210, 210, 230, al[v]);
+			if (getenv("SA_RAINDEBUG")) iv.setColor(255, 0, 0, 255); else iv.setColor(210, 210, 230, al[v]);
 			iv.setU(0.0f); iv.setV(0.0f);
 			idx.push_back((rw::uint16)verts.size());
 			verts.push_back(iv);
