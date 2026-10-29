@@ -4,6 +4,9 @@
 // Controls: W/A/S/D move, Q/E down/up, Shift = fast, left mouse drag = look, Esc = quit. Stats go to sa_stream.log.
 #include <rw.h>
 #include <skeleton.h>
+#define NOMINMAX
+#include <d3d9.h>
+namespace rw { namespace d3d { extern IDirect3DDevice9 *d3ddevice; } }
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -1714,6 +1717,10 @@ void DrawRain(float dt, unsigned tms) {
 }
 
 void Idle(float dt) {
+	// test aid: SA_HOLDW=<seconds> holds W from that time on (blend screenshots)
+	static float holdT = 0.0f;
+	holdT += dt;
+	if (getenv("SA_HOLDW") && holdT >= (float)atof(getenv("SA_HOLDW"))) sk::keys['W'] = true;
 	static auto start = std::chrono::steady_clock::now();
 	double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 	bool anyMove = sk::keys['W'] || sk::keys['A'] || sk::keys['S'] || sk::keys['D'];
@@ -1780,6 +1787,32 @@ void Idle(float dt) {
 	DrawWater();
 	DrawRain(dt, (unsigned)(now * 1000.0));
 	gCamera->endUpdate();
+	// Test aid: SA_SHOT=<file.tga> SA_SHOTAT=<seconds> writes the back buffer once (the desktop capture of the window comes out white here).
+	static const char *shotPath = getenv("SA_SHOT");
+	static bool shotDone = false;
+	if (shotPath && !shotDone && now >= (getenv("SA_SHOTAT") ? atof(getenv("SA_SHOTAT")) : 8.0)) {
+		shotDone = true;
+		IDirect3DSurface9 *rt = nullptr, *sys = nullptr;
+		if (SUCCEEDED(rw::d3d::d3ddevice->GetRenderTarget(0, &rt))) {
+			D3DSURFACE_DESC d;
+			rt->GetDesc(&d);
+			if (SUCCEEDED(rw::d3d::d3ddevice->CreateOffscreenPlainSurface(d.Width, d.Height, d.Format, D3DPOOL_SYSTEMMEM, &sys, nullptr)) &&
+			    SUCCEEDED(rw::d3d::d3ddevice->GetRenderTargetData(rt, sys))) {
+				D3DLOCKED_RECT lr;
+				if (SUCCEEDED(sys->LockRect(&lr, nullptr, D3DLOCK_READONLY))) {
+					FILE *f = fopen(shotPath, "wb");
+					uint8_t hdr[18] = {0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, (uint8_t)(d.Width & 255), (uint8_t)(d.Width >> 8), (uint8_t)(d.Height & 255), (uint8_t)(d.Height >> 8), 32, 0x28};
+					fwrite(hdr, 1, 18, f);
+					for (UINT y = 0; y < d.Height; y++) fwrite((uint8_t *)lr.pBits + y * lr.Pitch, 1, d.Width * 4, f);
+					fclose(f);
+					sys->UnlockRect();
+					fprintf(gLog, "SA_SHOT: wrote %s (%ux%u fmt %d)\n", shotPath, d.Width, d.Height, (int)d.Format);
+				}
+			}
+			if (sys) sys->Release();
+			rt->Release();
+		}
+	}
 	gCamera->showRaster(0);
 }
 
