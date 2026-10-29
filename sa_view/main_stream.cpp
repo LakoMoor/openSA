@@ -1855,6 +1855,145 @@ void UpdateAmbientPeds(float dt) {
 	if (pd && SpawnAmbientPed(n, pd->id)) fprintf(gLog, "ambient ped %s group %d at (%.0f,%.0f), %zu alive\n", mn.c_str(), grp, n.x, n.y, gAmbientPeds.size());
 }
 
+// ---- Ambient traffic ----
+// ORIGINAL: CCarCtrl::GenerateOneRandomCar picks a car node and link by the popcycle car density, the AI follows CCarCtrl::PickNextNodeRandomly with lane
+// logic from the car path links (CarPathLink dir/width/lanes), steering / speed come from the autopilot (cruise speed, curve slowdown, traffic lights).
+// DEVIATIONS: cars follow the node-to-node segment shifted 1.8 m to the right of travel (lane offset is a guess, car path link lanes not used), constant
+// 10 m/s, no curve slowdown, no traffic lights, no lane changes; stop only when another traffic car is within 8 m ahead (no reaction to player / peds);
+// model from PickRandomGeneratorModel (no car streaming); spawn ring 80..140 m, despawn 170 m and cap min(popcycle maxCars, 20) are guesses.
+struct TrafficCar {
+	rw::Clump *clump = nil;
+	VehProto *vp = nil;
+	rw::V3d pos;
+	float heading = 0.0f; // radians, forward = (-sin, cos)
+	NodeAddr cur, prev, next;
+	int model = -1;
+};
+std::vector<TrafficCar> gTraffic;
+std::unordered_map<int64_t, std::vector<PedNodeRef>> gCarNodeGrid;
+bool gCarNodesBuilt = false;
+
+bool ChooseNextCarNode(const NodeAddr &cur, const NodeAddr &prev, NodeAddr &out) {
+	const PathArea &ar = gPaths.areas[cur.area];
+	const PathNode &nd = ar.nodes[cur.node];
+	std::vector<NodeAddr> opts, back;
+	for (int i = 0; i < nd.numLinks; i++) {
+		size_t idx = (size_t)nd.baseLinkId + i;
+		if (idx >= ar.links.size()) continue;
+		NodeAddr t = ar.links[idx];
+		if (!t.valid() || t.area >= 64 || t.node >= gPaths.areas[t.area].nodes.size()) continue;
+		const PathNode &tn = NodeOf(t);
+		if (!tn.vehicle || tn.switchedOff || tn.water) continue;
+		(t.area == prev.area && t.node == prev.node ? back : opts).push_back(t);
+	}
+	std::vector<NodeAddr> &pick = opts.empty() ? back : opts;
+	if (pick.empty()) return false;
+	gPickRng = gPickRng * 1664525u + 1013904223u;
+	out = pick[(gPickRng >> 8) % pick.size()];
+	return true;
+}
+
+void PlaceTrafficCar(TrafficCar &c) {
+	float gz;
+	if (GroundHeight(c.pos.x, c.pos.y, c.pos.z + 2.0f, 6.0f, gz)) c.pos.z = gz;
+	rw::V3d zax = {0, 0, 1};
+	rw::Frame *f = c.clump->getFrame();
+	f->rotate(&zax, c.heading * 57.29578f, rw::COMBINEREPLACE);
+	rw::V3d p = {c.pos.x, c.pos.y, c.pos.z - c.vp->minZ};
+	f->translate(&p, rw::COMBINEPOSTCONCAT);
+}
+
+void UpdateTraffic(float dt) {
+	if (!gPathsLoaded || getenv("SA_NOTRAFFIC") || gCarGens.empty()) return;
+	if (!gCarNodesBuilt) {
+		gCarNodesBuilt = true;
+		size_t n = 0;
+		for (int a = 0; a < 64; a++)
+			for (size_t i = 0; i < gPaths.areas[a].nodes.size(); i++) {
+				const PathNode &nd = gPaths.areas[a].nodes[i];
+				if (!nd.vehicle || nd.switchedOff || nd.water || nd.roadBlock || !nd.numLinks) continue;
+				gCarNodeGrid[PedCellKey((int)std::floor(nd.x / 50.0f), (int)std::floor(nd.y / 50.0f))].push_back({{(uint16_t)a, (uint16_t)i}, nd.x, nd.y, nd.z});
+				n++;
+			}
+		fprintf(gLog, "traffic: %zu usable car nodes\n", n);
+	}
+	const float kSpeed = 10.0f, kLane = 1.8f;
+	for (size_t i = 0; i < gTraffic.size();) {
+		TrafficCar &c = gTraffic[i];
+		float dx = c.pos.x - camPos.x, dy = c.pos.y - camPos.y;
+		bool gone = dx * dx + dy * dy > 170.0f * 170.0f;
+		if (!gone) {
+			const PathNode &t = NodeOf(c.next);
+			float fx = -std::sin(c.heading), fy = std::cos(c.heading);
+			// target = next node shifted right of the travel direction
+			float tx = t.x - c.pos.x, ty = t.y - c.pos.y, d = std::sqrt(tx * tx + ty * ty);
+			bool blocked = false;
+			for (const TrafficCar &o : gTraffic) if (&o != &c) {
+				float ox = o.pos.x - c.pos.x, oy = o.pos.y - c.pos.y, fw = ox * fx + oy * fy, sd = ox * fy - oy * fx;
+				if (fw > 0 && fw < 8.0f && std::fabs(sd) < 2.5f) { blocked = true; break; }
+			}
+			float step = blocked ? 0.0f : kSpeed * dt;
+			if (d <= step + 0.3f) {
+				c.prev = c.cur; c.cur = c.next;
+				if (!ChooseNextCarNode(c.cur, c.prev, c.next)) gone = true;
+			} else if (d > 0.001f) {
+				float rx = ty / d, ry = -tx / d; // right of the segment direction
+				float aimX = t.x + rx * kLane - c.pos.x, aimY = t.y + ry * kLane - c.pos.y;
+				float want = std::atan2(-aimX, aimY), df = std::fmod(want - c.heading + 3.14159265f * 3, 6.2831853f) - 3.14159265f;
+				c.heading += df * std::min(1.0f, 4.0f * dt);
+				c.pos.x += -std::sin(c.heading) * step; c.pos.y += std::cos(c.heading) * step;
+			}
+		}
+		if (gone) { gWorld->removeClump(c.clump); c.clump->destroy(); gTraffic.erase(gTraffic.begin() + i); continue; }
+		PlaceTrafficCar(c);
+		i++;
+	}
+	if (!gPending.empty() || gStreamer->PendingCount() != 0) return;
+	float hour = std::fmod(gGameMinutes, 1440.0f) / 60.0f;
+	const Zone *z = ZoneAt(camPos.x, camPos.y, camPos.z);
+	int type = 4;
+	if (z) {
+		std::string up = z->name;
+		for (char &ch : up) ch = (char)toupper((unsigned char)ch);
+		auto it = gVM.zonePopType.find(up);
+		if (it != gVM.zonePopType.end()) type = it->second;
+	}
+	if (type < 0 || type >= (int)gPop.types.size()) return;
+	size_t maxCars = (size_t)std::min(gPop.types[type].rows[0][(int)hour / 2 % 12].maxCars, 20);
+	if (gTraffic.size() >= maxCars) return;
+	std::vector<const PedNodeRef *> cand;
+	int cx0 = (int)std::floor(camPos.x / 50.0f), cy0 = (int)std::floor(camPos.y / 50.0f);
+	for (int cx = cx0 - 3; cx <= cx0 + 3; cx++)
+		for (int cy = cy0 - 3; cy <= cy0 + 3; cy++) {
+			auto g = gCarNodeGrid.find(PedCellKey(cx, cy));
+			if (g == gCarNodeGrid.end()) continue;
+			for (const PedNodeRef &n : g->second) {
+				float dx = n.x - camPos.x, dy = n.y - camPos.y, d2 = dx * dx + dy * dy;
+				if (d2 >= 80.0f * 80.0f && d2 <= 140.0f * 140.0f && std::fabs(n.z - camPos.z) < 30.0f) cand.push_back(&n);
+			}
+		}
+	if (cand.empty()) return;
+	gPickRng = gPickRng * 1664525u + 1013904223u;
+	const PedNodeRef &n = *cand[(gPickRng >> 8) % cand.size()];
+	for (const TrafficCar &o : gTraffic) { float ox = o.pos.x - n.x, oy = o.pos.y - n.y; if (ox * ox + oy * oy < 8.0f * 8.0f) return; }
+	for (const CarGen &o : gCarGens) if (o.clump) { float ox = o.pos.x - n.x, oy = o.pos.y - n.y; if (ox * ox + oy * oy < 5.0f * 5.0f) return; }
+	int model = PickRandomGeneratorModel(hour, false);
+	if (model < 0) return;
+	VehProto *vp = GetVehicleProto(model, -1, -1);
+	if (!vp) return;
+	TrafficCar c;
+	c.vp = vp; c.model = model; c.cur = c.prev = n.a;
+	c.pos = {n.x, n.y, n.z};
+	if (!ChooseNextCarNode(c.cur, c.prev, c.next)) return;
+	const PathNode &t = NodeOf(c.next);
+	c.heading = std::atan2(-(t.x - n.x), t.y - n.y);
+	c.clump = vp->clump->clone();
+	gWorld->addClump(c.clump);
+	PlaceTrafficCar(c);
+	gTraffic.push_back(c);
+	fprintf(gLog, "traffic car model %d at (%.0f,%.0f), %zu alive\n", model, n.x, n.y, gTraffic.size());
+}
+
 bool AttachPlugins() {
 	rw::registerMeshPlugin();
 	rw::registerNativeDataPlugin();
@@ -2452,6 +2591,7 @@ void Idle(float dt) {
 	AnimatePed(dt);
 	UpdateCars();
 	UpdateAmbientPeds(dt);
+	UpdateTraffic(dt);
 	UpdateCamera();
 	gCamera->clear(&Background, rw::Camera::CLEARIMAGE | rw::Camera::CLEARZ);
 	gCamera->beginUpdate();
