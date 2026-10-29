@@ -1264,38 +1264,48 @@ void DrawWater() {
 		bool ok = sa::LoadWaterDat(gameDir + "/data/water.dat", gWater);
 		fprintf(gLog, "water.dat: %zu polygons (%s)\n", gWater.size(), ok ? "ok" : "failed");
 	}
-	// colour/alpha from the timecyc water columns; DEVIATION: the original modulates its water texture with this and adds waves
-	rw::uint8 wr = (rw::uint8)gTc.water[0], wg = (rw::uint8)gTc.water[1], wb = (rw::uint8)gTc.water[2], wa = (rw::uint8)std::min(255.0f, gTc.water[3]);
-	std::vector<rw::RWDEVICE::Im3DVertex> verts;
-	std::vector<rw::uint16> idx;
-	for (const sa::WaterPoly &w : gWater) {
-		float cx = 0, cy = 0;
-		for (int i = 0; i < w.n; i++) { cx += w.x[i]; cy += w.y[i]; }
-		cx /= w.n; cy /= w.n;
-		float dx = cx - camPos.x, dy = cy - camPos.y;
-		if (dx * dx + dy * dy > (gFarClip + 3000.0f) * (gFarClip + 3000.0f)) continue; // polygons are large; keep generous
-		if (verts.size() + 4 > 65000) break;
-		rw::uint16 base = (rw::uint16)verts.size();
-		for (int i = 0; i < w.n; i++) {
-			rw::RWDEVICE::Im3DVertex v;
-			v.setX(w.x[i]); v.setY(w.y[i]); v.setZ(w.z[i]);
-			v.setColor(wr, wg, wb, wa);
-			v.setU(0); v.setV(0);
-			verts.push_back(v);
+	// CWaterLevel::RenderWater: two flat layers textured with "waterclear256" (particle.txd), UV = world xy / 25 and / 12.5 m (GetWaterLayerTexInfo),
+	// colour = timecyc water rgb * 0.577, layer alphas 160 and 90 (0x8D3808, exe-read). DEVIATION: the UV scroll (TextureShift*, animated by
+	// CWaterLevel::Update), the wave/vertex animation on the water grid, flow, foam and the timecyc water alpha are not implemented; the water
+	// polygons are drawn as stored in water.dat instead of the original's 2x2 m renderer grid.
+	rw::Texture *tex = ParticleTex("waterclear256");
+	if (tex) { tex->setAddressU(rw::Texture::WRAP); tex->setAddressV(rw::Texture::WRAP); }
+	auto c8 = [](float v) { return (rw::uint8)std::min(255.0f, v * 0.577f); };
+	for (int layer = 0; layer < 2; layer++) {
+		const float scale = layer == 0 ? 25.0f : 12.5f;
+		const rw::uint8 alpha = layer == 0 ? 160 : 90;
+		std::vector<rw::RWDEVICE::Im3DVertex> verts;
+		std::vector<rw::uint16> idx;
+		for (const sa::WaterPoly &w : gWater) {
+			float cx = 0, cy = 0;
+			for (int i = 0; i < w.n; i++) { cx += w.x[i]; cy += w.y[i]; }
+			cx /= w.n; cy /= w.n;
+			float dx = cx - camPos.x, dy = cy - camPos.y;
+			if (dx * dx + dy * dy > (gFarClip + 3000.0f) * (gFarClip + 3000.0f)) continue; // polygons are large; keep generous
+			if (verts.size() + 4 > 65000) break;
+			rw::uint16 base = (rw::uint16)verts.size();
+			for (int i = 0; i < w.n; i++) {
+				rw::RWDEVICE::Im3DVertex v;
+				v.setX(w.x[i]); v.setY(w.y[i]); v.setZ(w.z[i]);
+				v.setColor(c8(gTc.water[0]), c8(gTc.water[1]), c8(gTc.water[2]), alpha);
+				v.setU(w.x[i] / scale); v.setV(w.y[i] / scale);
+				verts.push_back(v);
+			}
+			idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
+			if (w.n == 4) { idx.push_back(base + 1); idx.push_back(base + 3); idx.push_back(base + 2); }
 		}
-		idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
-		if (w.n == 4) { idx.push_back(base + 1); idx.push_back(base + 3); idx.push_back(base + 2); }
+		if (verts.empty()) return;
+		rw::SetRenderStatePtr(rw::TEXTURERASTER, tex ? tex->raster : nil);
+		rw::SetRenderState(rw::VERTEXALPHA, 1);
+		rw::SetRenderState(rw::SRCBLEND, rw::BLENDSRCALPHA);
+		rw::SetRenderState(rw::DESTBLEND, rw::BLENDINVSRCALPHA);
+		rw::SetRenderState(rw::ZWRITEENABLE, 0);
+		rw::SetRenderState(rw::CULLMODE, rw::CULLNONE);
+		rw::im3d::Transform(verts.data(), (rw::int32)verts.size(), nil, rw::im3d::EVERYTHING);
+		rw::im3d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, idx.data(), (rw::int32)idx.size());
+		rw::im3d::End();
 	}
-	if (verts.empty()) return;
 	rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
-	rw::SetRenderState(rw::VERTEXALPHA, 1);
-	rw::SetRenderState(rw::SRCBLEND, rw::BLENDSRCALPHA);
-	rw::SetRenderState(rw::DESTBLEND, rw::BLENDINVSRCALPHA);
-	rw::SetRenderState(rw::ZWRITEENABLE, 0);
-	rw::SetRenderState(rw::CULLMODE, rw::CULLNONE);
-	rw::im3d::Transform(verts.data(), (rw::int32)verts.size(), nil, rw::im3d::EVERYTHING);
-	rw::im3d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, idx.data(), (rw::int32)idx.size());
-	rw::im3d::End();
 	rw::SetRenderState(rw::ZWRITEENABLE, 1);
 	rw::SetRenderState(rw::CULLMODE, rw::CULLBACK);
 }
