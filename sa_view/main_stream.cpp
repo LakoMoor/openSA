@@ -30,6 +30,10 @@ namespace rw { namespace d3d { extern IDirect3DDevice9 *d3ddevice; } }
 #include "ScriptVM.h"
 #include "PopCycle.h"
 #include "PathNodes.h"
+#include "AudioBank.h"
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <mmsystem.h>
 #include "Handling.h"
 
 rw::EngineOpenParams engineOpenParams;
@@ -1176,6 +1180,57 @@ void UpdatePed() {
 		f->rotate(&zaxis, -camYaw, rw::COMBINEREPLACE);
 		f->translate(&origin, rw::COMBINEPOSTCONCAT);
 	}
+}
+
+// ---- Audio (first slice: player footsteps) ----
+// ORIGINAL: CAEPedAudioEntity::HandleAnimEvent plays the foot sounds from animation events, the bank follows the contact surface (grass / sand / gravel /
+// wood / tile / metal / generic for concrete), through CAESoundManager with 3D attenuation and mixing.
+// DEVIATIONS: always the generic bank (bank 0, sounds 1..5 as PlayRandomGenericFootstepSound) - no surface detection; steps are timed as two per
+// clip loop instead of from the animation's events; flat volume, no 3D positioning, no other sounds (ambient peds, vehicles, radio, weapons, ambience).
+// A pool of 8 waveOut devices plays one sound each (the original mixes through its own software mixer).
+SfxBanks gSfx;
+SfxBank gFeetBank;
+bool gSfxReady = false;
+struct WaveVoice { HWAVEOUT h = nullptr; WAVEHDR hdr = {}; std::vector<int16_t> buf; bool used = false; };
+WaveVoice gVoices[8];
+
+void PlaySfx(const SfxSound &s, float vol) {
+	for (WaveVoice &v : gVoices) {
+		if (v.used && !(v.hdr.dwFlags & WHDR_DONE)) continue;
+		if (v.used) waveOutUnprepareHeader(v.h, &v.hdr, sizeof(v.hdr));
+		if (v.h) waveOutClose(v.h);
+		v.h = nullptr; v.used = false;
+		WAVEFORMATEX fmt = {WAVE_FORMAT_PCM, 1, (DWORD)s.rate, (DWORD)s.rate * 2, 2, 16, 0};
+		if (waveOutOpen(&v.h, WAVE_MAPPER, &fmt, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) { v.h = nullptr; return; }
+		v.buf.resize(s.pcm.size());
+		for (size_t i = 0; i < s.pcm.size(); i++) v.buf[i] = (int16_t)(s.pcm[i] * vol);
+		v.hdr = {};
+		v.hdr.lpData = (LPSTR)v.buf.data();
+		v.hdr.dwBufferLength = (DWORD)(v.buf.size() * 2);
+		waveOutPrepareHeader(v.h, &v.hdr, sizeof(v.hdr));
+		waveOutWrite(v.h, &v.hdr, sizeof(v.hdr));
+		v.used = true;
+		return;
+	}
+}
+
+void UpdateFootsteps(float dt) {
+	static float timer = 0.0f;
+	if (!gSfxReady) {
+		gSfxReady = true;
+		if (gSfx.load(gameDir + "/audio") && gSfx.loadBank(0, gFeetBank)) fprintf(gLog, "audio: %zu banks, feet bank has %zu sounds\n", gSfx.bankCount(), gFeetBank.sounds.size());
+		else { fprintf(gLog, "audio: failed to load banks\n"); gFeetBank.sounds.clear(); }
+	}
+	bool moving = gWalk && gGrounded && !gSwimming && gDriveGen < 0 && (sk::keys['W'] || sk::keys['A'] || sk::keys['S'] || sk::keys['D']) && !getenv("SA_MUTE");
+	if (!moving || gFeetBank.sounds.size() < 6) { timer = 0.0f; return; }
+	auto it = gAnims.find(PedClip(true));
+	float interval = it != gAnims.end() && it->second.duration > 0 ? it->second.duration * 0.5f : 0.4f;
+	timer -= dt;
+	if (timer > 0.0f) return;
+	timer = interval;
+	static uint32_t rng = 0x2468ace;
+	rng = rng * 1664525u + 1013904223u;
+	PlaySfx(gFeetBank.sounds[1 + (rng >> 8) % 5], 0.8f);
 }
 
 void UpdateCamera() {
@@ -2589,6 +2644,7 @@ void Idle(float dt) {
 	UpdateStreaming(now);
 	UpdatePed();
 	AnimatePed(dt);
+	UpdateFootsteps(dt);
 	UpdateCars();
 	UpdateAmbientPeds(dt);
 	UpdateTraffic(dt);
