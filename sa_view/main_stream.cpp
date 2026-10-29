@@ -692,7 +692,11 @@ bool gWalk = false, gGrounded = true, gSwimming = false;
 float gVelZ = 0.0f, gAirVx = 0.0f, gAirVy = 0.0f;
 
 void UpdateWalk(float dt) {
-	constexpr float kOriginAboveFeet = 1.0f, kGravity = 20.0f, kStep = 1.0f, kMaxDrop = 60.0f; // origin height 1.0 verified (ped box min z), 20 = 0.008 @0x863984. DEVIATION: kStep (max instant step-up, 1.0 m) and kMaxDrop are guesses, SA has no such snap (ground contact via CPhysical sphere/line tests)
+	// Ground contact as in CPed::ProcessEntityCollision (0x5E2530, read in the exe): a standing ped's collision is one line from the ped origin straight down
+	// to -1.0, lengthened by 0.15 * timeStep while the ped is on the ground (flag 0x46c bit 1); a hit snaps the origin to hitZ + 1.0. So kStep = 1.0 (line starts at the
+	// origin) and the snap-down reach 0.15 * timeStep below are exe-derived; kMaxDrop is only the search range of the ray. 20 = 0.008 @0x863984, origin height 1.0 (ped box min z).
+	// DEVIATION: wall pushing uses my sphere test, not the full CPhysical contact resolution; slopes steeper than -0.867 normal z (exe check) are not handled.
+	constexpr float kOriginAboveFeet = 1.0f, kGravity = 20.0f, kStep = 1.0f, kMaxDrop = 60.0f;
 	float gz;
 	bool ground = GroundHeight(camPos.x, camPos.y, camPos.z - kOriginAboveFeet + kStep, kMaxDrop, gz);
 	// Swimming. Entry rule from CPed::ProcessBuoyancy (0x5E1FA0) + cBuoyancy::ProcessBuoyancy: immersion = clamp((waterLevel - z + 1) / 1.9),
@@ -720,7 +724,8 @@ void UpdateWalk(float dt) {
 		return;
 	}
 	float floorZ = gz + kOriginAboveFeet;
-	gGrounded = camPos.z <= floorZ + 0.02f && gVelZ <= 0.0f;
+	bool wasGrounded = gGrounded;
+	gGrounded = (camPos.z <= floorZ + 0.02f || (wasGrounded && camPos.z - floorZ <= 0.15f * dt * 50.0f)) && gVelZ <= 0.0f;
 	if (!gGrounded) {
 		gVelZ -= kGravity * dt;
 		camPos.z += gVelZ * dt;
