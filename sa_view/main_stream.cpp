@@ -2401,6 +2401,34 @@ void UpdateAmbientPeds(float dt) {
 				if (GroundHeight(p.pos.x, p.pos.y, p.pos.z + 1.5f, 4.0f, gz)) p.pos.z = gz;
 			}
 		}
+		// test aid SA_PEDHIT=1: once the driven car moves, put this ped 1.8 m ahead of it (once, inside the hit box)
+		{
+			static bool forcedPed = false;
+			if (!forcedPed && getenv("SA_PEDHIT") && gDriveGen >= 0 && gPhysActive && gPhys.forwardSpeed() * 50.0f > 1.2f) {
+				forcedPed = true;
+				p.pos.x = gPhys.pos.x + gPhys.fwd.x * 1.8f; p.pos.y = gPhys.pos.y + gPhys.fwd.y * 1.8f; p.pos.z = gPhys.pos.z - 0.5f;
+				fprintf(gLog, "ped hit test: placed a pedestrian 1.8 m ahead of the driven car");
+				fprintf(gLog, "%c", 10);
+			}
+		}
+		// Driven car runs over a pedestrian (step 11): hit box 2.3 m ahead/behind the car centre and 1.1 m to each side (+0.3 m ped radius), car speed > 1 m/s. The car takes the two-body
+		// impulse against a 70 kg point mass (reVC ApplyCollision form, elasticity 0.05 ASSUMED, no VehicleDamage). DEVIATIONS: the ped simply disappears (no knock-down / ragdoll / injury /
+		// blood / wanted level / sound), the ped mass of 70 kg is a guess, pedestrians never react to the car before the hit.
+		if (!gone && gDriveGen >= 0 && gPhysActive && std::fabs(gPhys.forwardSpeed()) * 50.0f > 1.0f) {
+			vp::V3 rel = {p.pos.x - gPhys.pos.x, p.pos.y - gPhys.pos.y, 0.0f};
+			float lon = rel.x * gPhys.fwd.x + rel.y * gPhys.fwd.y, lat = rel.x * gPhys.fwd.y - rel.y * gPhys.fwd.x;
+			if (std::fabs(lon) < 2.3f + 0.3f && std::fabs(lat) < 1.1f + 0.3f && std::fabs(p.pos.z + 0.9f - gPhys.pos.z) < 2.0f) {
+				vp::V3 n = vp::norm({-rel.x, -rel.y, 0.0f});
+				float sp = vp::dot(gPhys.getSpeed(rel), n);
+				if (sp < 0.0f) {
+					float imp = -1.05f * sp / (1.0f / gPhys.massAt(rel, n) + 1.0f / 70.0f);
+					vp::V3 f = n * imp;
+					gPhys.applyMoveForce(f); gPhys.applyTurnForce(f, rel);
+					fprintf(gLog, "car-ped hit: impulse %.1f car speed %.1f km/h\n", imp, gPhys.forwardSpeed() * 50.0f * 3.6f);
+					gone = true;
+				}
+			}
+		}
 		if (gone) { DestroyAmbient(p); gAmbientPeds.erase(gAmbientPeds.begin() + i); continue; }
 		for (ActiveClip &c : p.clips) c.time = std::fmod(c.time + dt, c.anim->duration);
 		// footsteps: generic bank (CAEPedAudioEntity: non-player peds always use it, 3 dB quieter), two per clip loop. DEVIATION: volume falls off with distance (quadratic, silent beyond 30 m) instead of 3D attenuation / panning.
@@ -2471,7 +2499,7 @@ std::vector<TrafficCar> gTraffic;
 void CarVsTraffic() {
 	// test aid SA_TRAFFICHIT=1: once the driven car moves, put the first traffic car 3 m ahead of it, facing it (forces a head-on contact)
 	static bool forced = false;
-	if (!forced && getenv("SA_TRAFFICHIT") && !gTraffic.empty() && gPhys.forwardSpeed() * 50.0f > 3.0f) {
+	if (!forced && getenv("SA_TRAFFICHIT") && !gTraffic.empty() && gPhys.forwardSpeed() * 50.0f > 1.5f) {
 		forced = true;
 		fprintf(gLog, "traffic hit test: placing traffic car 0 of %zu ahead of the driven car\n", gTraffic.size());
 		TrafficCar &t0 = gTraffic[0];
