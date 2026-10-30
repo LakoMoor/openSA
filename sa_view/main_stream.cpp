@@ -3385,7 +3385,7 @@ void DrawRain(float dt, unsigned tms) {
 	// them in a +-0.8 rad cone along the view direction, ground found by a vertical line, then 15+(int)(Rain*2) splashes within +-15 m of the spot at ground z + 0.1). The original spawns
 	// the "splash" particle effect (effects.fxp, not ported); DEVIATION: each splash is a tiny growing diamond outline (4 segments, 0.3 s) instead, capped at 1200 alive.
 	{
-		struct Splash { float x, y, z, age; };
+		struct Splash { float x, y, z, age, life; };
 		static std::vector<Splash> sp;
 		static float frameAcc = 0.0f;
 		frameAcc += dt * 50.0f;
@@ -3399,38 +3399,63 @@ void DrawRain(float dt, unsigned tms) {
 				float rads = (rand() & 1) ? rnd(0.0f, 6.2831853f) : rnd(-0.8f, 0.8f) + camYaw * 0.0174533f;
 				float sx = camPos.x + std::sin(rads) * radius, sy = camPos.y + std::cos(rads) * radius, gz;
 				if (!GroundHeight(sx, sy, 40.0f, 80.0f, gz)) continue;
-				for (int k = 0; k < per && sp.size() < 1200; k++) sp.push_back({sx + rnd(-15.0f, 15.0f), sy + rnd(-15.0f, 15.0f), gz + 0.1f, 0.0f});
+				for (int k = 0; k < per && sp.size() < 3000; k++) sp.push_back({sx + rnd(-15.0f, 15.0f), sy + rnd(-15.0f, 15.0f), gz + 0.1f, 0.0f, rnd(3.0f, 3.5f) * 0.03f});
 			}
 		}
-		std::vector<rw::RWDEVICE::Im3DVertex> sv;
-		std::vector<rw::uint16> si;
-		auto flush = [&]() {
-			if (sv.empty()) return;
-			rw::im3d::Transform(sv.data(), (rw::int32)sv.size(), nil, rw::im3d::EVERYTHING);
-			rw::im3d::RenderIndexedPrimitive(rw::PRIMTYPELINELIST, si.data(), (rw::int32)si.size());
-			rw::im3d::End();
-			sv.clear(); si.clear();
-		};
 		for (size_t k = 0; k < sp.size();) {
-			Splash &q = sp[k];
-			q.age += dt;
-			if (q.age > 0.3f) { sp[k] = sp.back(); sp.pop_back(); continue; }
-			float r = 0.04f + q.age * 0.5f;
-			uint8_t al = (uint8_t)(120.0f * (1.0f - q.age / 0.3f));
-			for (int e = 0; e < 4; e++) {
-				float a0 = e * 1.570796f, a1 = (e + 1) * 1.570796f;
-				for (float ang : {a0, a1}) {
-					rw::RWDEVICE::Im3DVertex iv;
-					iv.setX(q.x + std::cos(ang) * r); iv.setY(q.y + std::sin(ang) * r); iv.setZ(q.z);
-					iv.setColor(220, 220, 235, al); iv.setU(0.0f); iv.setV(0.0f);
-					si.push_back((rw::uint16)sv.size()); sv.push_back(iv);
-				}
-			}
-			if (sv.size() >= 9000) flush();
-			k++;
+			sp[k].age += dt;
+			if (sp[k].age > sp[k].life) { sp[k] = sp.back(); sp.pop_back(); } else k++;
 		}
+		// prt_splash (effects.fxp, read from the file): one emitter, textures splash_up1 -> splash_up2 (animated 1 -> 2 over the first half of the life), life 3.0..3.5 s * life multiplier 0.03
+		// (CWeather::AddRain passes FxPrtMult 1,1,1, alpha 0.25, size 0.02, life 0.03) = 0.09..0.105 s, size 2 -> 8 over the life * 0.02 = 4..16 cm, alpha 255 -> 0 * 0.25. DEVIATIONS: drawn as camera-facing
+		// quads with plain SRCALPHA/INVSRCALPHA blending (the file asks for blend ids 4/1, not mapped), lit/fogged by nothing, no LOD fade (LODSTART 30 / LODEND 50), no culling.
+		static rw::TexDictionary *fxTxd = nullptr; static bool fxTried = false;
+		if (!fxTried) {
+			fxTried = true;
+			std::ifstream f(gameDir + "/models/effectsPC.txd", std::ios::binary);
+			std::vector<uint8_t> b((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+			if (!b.empty()) fxTxd = ReadTxd(b);
+			if (fxTxd) FORLIST(lnk, fxTxd->textures) rw::Texture::fromDict(lnk)->setFilter(rw::Texture::LINEAR);
+			fprintf(gLog, "effectsPC.txd: %s\n", fxTxd ? "loaded" : "missing");
+		}
+		auto fxTex = [&](const char *name) -> rw::Texture * {
+			if (!fxTxd) return nullptr;
+			FORLIST(lnk, fxTxd->textures) { rw::Texture *t = rw::Texture::fromDict(lnk); if (Lower(t->name) == name) return t; }
+			return nullptr;
+		};
+		static rw::Texture *tUp[2] = {fxTex("splash_up1"), fxTex("splash_up2")};
+		rw::Matrix *cm = &gCamera->getFrame()->matrix;
+		for (int pass = 0; pass < 2; pass++) {
+			std::vector<rw::RWDEVICE::Im3DVertex> sv;
+			std::vector<rw::uint16> si;
+			auto flush = [&]() {
+				if (sv.empty()) return;
+				rw::SetRenderStatePtr(rw::TEXTURERASTER, tUp[pass] ? tUp[pass]->raster : nil);
+				rw::im3d::Transform(sv.data(), (rw::int32)sv.size(), nil, rw::im3d::EVERYTHING);
+				rw::im3d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, si.data(), (rw::int32)si.size());
+				rw::im3d::End();
+				sv.clear(); si.clear();
+			};
+			for (const Splash &q : sp) {
+				float t = q.age / q.life;
+				if ((t < 0.25f ? 0 : 1) != pass) continue;
+				float hw = (2.0f + 6.0f * t) * 0.02f * 0.5f;
+				uint8_t al = (uint8_t)(255.0f * (1.0f - t) * 0.25f);
+				float ux[4] = {-1, 1, -1, 1}, uy[4] = {1, 1, -1, -1};
+				rw::uint16 base = (rw::uint16)sv.size();
+				for (int c = 0; c < 4; c++) {
+					rw::RWDEVICE::Im3DVertex iv;
+					iv.setX(q.x + (cm->right.x * ux[c] + cm->up.x * uy[c]) * hw); iv.setY(q.y + (cm->right.y * ux[c] + cm->up.y * uy[c]) * hw); iv.setZ(q.z + (cm->right.z * ux[c] + cm->up.z * uy[c]) * hw);
+					iv.setColor(255, 255, 255, al); iv.setU((ux[c] + 1) * 0.5f); iv.setV((1 - uy[c]) * 0.5f);
+					sv.push_back(iv);
+				}
+				for (int k : {0, 1, 2, 1, 3, 2}) si.push_back((rw::uint16)(base + k));
+				if (sv.size() >= 9000) flush();
+			}
+			flush();
+		}
+		rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
 		{ static float lt = 0; lt += dt; if (lt > 2.0f) { lt = 0; fprintf(gLog, "rain: gRain %.2f strength %d splashes alive %zu\n", gRain, gRainStrength, sp.size()); } }
-		flush();
 	}
 	rw::SetRenderState(rw::ZWRITEENABLE, 1);
 	rw::SetRenderState(rw::VERTEXALPHA, 0);
