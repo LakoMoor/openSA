@@ -3350,7 +3350,7 @@ void DrawSandStorm(float dt, unsigned tms) {
 		for (int i = 0; i < frames && sim->alive() < 200; i++) {
 			float pp[3] = {camPos.x + fx * 10.0f + rnd(0.0f, 40.0f) - 20.0f, camPos.y + fy * 10.0f + rnd(0.0f, 40.0f) - 20.0f, camPos.z + rnd(0.0f, 7.0f) - 2.0f};
 			float vv[3] = {ws.dir.x * 25.0f, ws.dir.y * 25.0f, ws.dir.z * 25.0f};
-			FxMult m; m.r = 0.67f; m.g = 0.65f; m.b = 0.55f; m.a = 0.25f; m.life = 0.2f;
+			FxMult m; m.r = 0.67f; m.g = 0.65f; m.b = 0.55f; m.a = getenv("SA_FXBOOST") ? 1.0f : 0.25f; m.life = 0.2f;   // SA_FXBOOST: test aid, full alpha
 			sim->addParticle(pp, vv, m);
 		}
 	}
