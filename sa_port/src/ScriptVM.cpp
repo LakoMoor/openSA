@@ -223,7 +223,15 @@ bool ScriptVM::execute(ScmThread &t, uint16_t op, bool neg, std::vector<ScmArg> 
 	case 0x0214: case 0x03CA: condResult(t, false, neg); return true;                                  // HAS_PICKUP_BEEN_COLLECTED / DOES_OBJECT_EXIST
 	case 0x03EE: condResult(t, true, neg); return true;                                               // CAN_PLAYER_START_MISSION
 	case 0x0926: ref(t, args[1]) = 0; return true;                                                     // GET_NUMBER_OF_INSTANCES_OF_STREAMED_SCRIPT
-	case 0x04F8: case 0x014C: case 0x0914: return true;                                                // ADD_SET_PIECE / SWITCH_CAR_GENERATOR / REGISTER_STREAMED_SCRIPT_INTERNAL
+	// More pure bookkeeping (no effect here): zone gang/dealer strength + race, stunt jumps, object heading / keep-alive, pickup removal, blips, entry/exit flags, script names,
+	// relationships, brain registration, car-generator ownership. Scripted objects get a unique handle but are never created; oyster/horseshoe/snapshot pickups likewise.
+	case 0x076C: case 0x076A: case 0x0874: case 0x0814: case 0x01C7: case 0x0177: case 0x0215: case 0x0929: case 0x0570: case 0x018B: case 0x09B4:
+	case 0x03A4: case 0x0746: case 0x0884: case 0x0A17: return true;
+	case 0x095A: case 0x0959: case 0x0958: { static int32_t nextSpecial = 9000; ref(t, args[3]) = nextSpecial++; return true; }
+	case 0x0107: case 0x029B: { static int32_t nextObject = 20000; ref(t, args[4]) = nextObject++; return true; }
+	case 0x0517: { static int32_t nextProp = 7000; ref(t, args[4]) = nextProp++; return true; }
+	case 0x08AB: case 0x00FF: case 0x0118: condResult(t, false, neg); return true;   // HAS_STREAMED_SCRIPT_LOADED / LOCATE_CHAR_ON_FOOT_3D / IS_CHAR_DEAD (never loaded / false / alive)
+	case 0x04F8: case 0x014C: case 0x0914: return true;                                               // ADD_SET_PIECE / SWITCH_CAR_GENERATOR / REGISTER_STREAMED_SCRIPT_INTERNAL
 	case 0x09E8: ref(t, args[1]) = 0; return true;   // GET_CHAR_AREA_VISIBLE: always outside any interior (area 0); DEVIATION: interiors are not tracked
 	case 0x0002: t.ip = label(t, getI(t, args[0])); return true;
 	case 0x004D: if (!t.condFlag) t.ip = label(t, getI(t, args[0])); return true;
