@@ -3362,7 +3362,7 @@ void DrawSandStorm(float dt, unsigned tms) {
 		float t = p[6] / p[7];
 		float a = t < 0.1f ? t / 0.1f : (1.0f - t) / 0.9f;
 		uint8_t al = (uint8_t)(255.0f * a * 0.25f);
-		float hw = p[10] * 0.5f, ca = std::cos(p[8] * 0.0174533f), sa = std::sin(p[8] * 0.0174533f);
+		float hw = p[10], ca = std::cos(p[8] * 0.0174533f), sa = std::sin(p[8] * 0.0174533f);
 		float ux[4] = {-1, 1, -1, 1}, uy[4] = {1, 1, -1, -1};
 		rw::uint16 base = (rw::uint16)sv.size();
 		for (int c = 0; c < 4; c++) {
@@ -3474,7 +3474,7 @@ void DrawRain(float dt, unsigned tms) {
 			if (sp[k].age > sp[k].life) { sp[k] = sp.back(); sp.pop_back(); } else k++;
 		}
 		// prt_splash (effects.fxp, read from the file): one emitter, textures splash_up1 -> splash_up2 (animated 1 -> 2 over the first half of the life), life 3.0..3.5 s * life multiplier 0.03
-		// (CWeather::AddRain passes FxPrtMult 1,1,1, alpha 0.25, size 0.02, life 0.03) = 0.09..0.105 s, size 2 -> 8 over the life * 0.02 = 4..16 cm, alpha 255 -> 0 * 0.25. DEVIATIONS (blend now mapped: 4/1 = SRCALPHA/ONE, i.e. additive): drawn as camera-facing
+		// (CWeather::AddRain passes FxPrtMult 1,1,1, alpha 0.25, size 0.02, life 0.03) = 0.09..0.105 s, size 2 -> 8 over the life * 0.02 = half-extent 4..16 cm, alpha 255 -> 0 * 0.25. DEVIATIONS (blend now mapped: 4/1 = SRCALPHA/ONE, i.e. additive): drawn as camera-facing
 		// quads, lit/fogged by nothing, no LOD fade (LODSTART 30 / LODEND 50), no culling.
 		static rw::TexDictionary *fxTxd = nullptr; static bool fxTried = false;
 		if (!fxTried) {
@@ -3507,7 +3507,7 @@ void DrawRain(float dt, unsigned tms) {
 			for (const Splash &q : sp) {
 				float t = q.age / q.life;
 				if ((t < 0.25f ? 0 : 1) != pass) continue;
-				float hw = (2.0f + 6.0f * t) * 0.02f * 0.5f;
+				float hw = (2.0f + 6.0f * t) * 0.02f;   // emitter Render (0x4A2C40): corners = right*size, up*size, i.e. size is a half-extent (no 0.5)
 				uint8_t al = (uint8_t)(255.0f * (1.0f - t) * 0.25f);
 				float ux[4] = {-1, 1, -1, 1}, uy[4] = {1, 1, -1, -1};
 				rw::uint16 base = (rw::uint16)sv.size();
