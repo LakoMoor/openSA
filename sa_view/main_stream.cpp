@@ -1919,6 +1919,8 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 		static vp::CarPhysics lastGood; static bool haveGood = false;
 		if (gPhys.wheelsOnGround >= 3) { lastGood = gPhys; haveGood = true; }
 		else if (haveGood && gPhys.pos.z < lastGood.pos.z - 40.0f) {
+			{ float gz = 0; bool ok = GroundHeight(gPhys.pos.x, gPhys.pos.y, gPhys.pos.z + 60.0f, 400.0f, gz);
+			  fprintf(gLog, "physics: guard at (%.1f %.1f %.1f) from good z %.1f, ground query from +60 m: %s %.1f\n", gPhys.pos.x, gPhys.pos.y, gPhys.pos.z, lastGood.pos.z, ok ? "hit" : "none", gz); }
 			gPhys = lastGood; gPhys.moveSpeed = {0, 0, 0}; gPhys.turnSpeed = {0, 0, 0};
 			fprintf(gLog, "physics: fell through unloaded ground, restored the last grounded state\n");
 		}
