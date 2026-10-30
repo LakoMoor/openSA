@@ -3391,6 +3391,81 @@ void DrawSandStorm(float dt, unsigned tms) {
 	rw::SetRenderState(rw::VERTEXALPHA, 0);
 }
 
+// Test aid SA_FX=<system name> (e.g. prt_wake): runs that effects.fxp system's first primitive (FxEmitterSim) 6 m in front of the start camera and draws it with its own
+// blend ids (g_BlendFunctions order == librw BLENDZERO + id), texture from particle.txd/effectsPC.txd, camera-facing quads or FX_INFO_FLAT quads. Systems without EMRATE get a burst
+// of particles every 0.5 s. DEVIATIONS: all the FxEmitterSim ones (forces only, no friction/wind...), no LOD fade, no lighting.
+void DrawFxTest(float dt) {
+	static const char *name = getenv("SA_FX");
+	if (!name) return;
+	static FxProject proj; static FxEmitterSim *sim = nullptr; static bool tried = false; static float org[3]; static const FxPrim *prim = nullptr;
+	static rw::TexDictionary *efTxd = nullptr;
+	if (!tried) {
+		tried = true;
+		if (proj.load(gameDir + "/models/effects.fxp")) { const FxSystem *fs = proj.find(name); if (fs && !fs->prims.empty()) { prim = &fs->prims[0]; sim = new FxEmitterSim(*prim, *fs); } }
+		std::ifstream f(gameDir + "/models/effectsPC.txd", std::ios::binary);
+		std::vector<uint8_t> bb((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+		if (!bb.empty()) efTxd = ReadTxd(bb);
+		rw::Matrix *c0 = &gCamera->getFrame()->matrix;
+		org[0] = camPos.x + c0->at.x * 6.0f; org[1] = camPos.y + c0->at.y * 6.0f; org[2] = camPos.z + (getenv("SA_FXZ") ? (float)atof(getenv("SA_FXZ")) : -0.5f);
+		fprintf(gLog, "SA_FX %s: %s, origin %.1f %.1f %.1f\n", name, sim ? "running" : "NOT FOUND", org[0], org[1], org[2]);
+	}
+	if (!sim) return;
+	static float burst = 0.0f;
+	burst += dt;
+	if (!prim->info("EMRATE") && burst > 0.5f) { burst = 0.0f; { FxMult m; if (getenv("SA_FXSIZE")) m.size = (float)atof(getenv("SA_FXSIZE")); if (getenv("SA_FXALPHA")) m.a = (float)atof(getenv("SA_FXALPHA")); sim->addParticle(org, nullptr, m); } }
+	sim->update(dt, org);
+	std::vector<FxBillboard> bb;
+	sim->collect(bb);
+	{ static float lt = 0; lt += dt; if (lt > 2.0f) { lt = 0; fprintf(gLog, "SA_FX %s: %zu alive\n", name, bb.size()); } }
+	if (bb.empty()) return;
+	auto findTex = [&](const std::string &n) -> rw::Texture * {
+		if (n == "NULL") return nullptr;
+		if (rw::Texture *t = ParticleTex(Lower(n.c_str()).c_str())) return t;
+		if (efTxd) FORLIST(lnk, efTxd->textures) { rw::Texture *t = rw::Texture::fromDict(lnk); if (Lower(t->name) == Lower(n.c_str())) return t; }
+		return nullptr;
+	};
+	rw::Matrix *cm = &gCamera->getFrame()->matrix;
+	static const char *texKeys[4] = {"TEXTURE", "TEXTURE2", "TEXTURE3", "TEXTURE4"};
+	rw::SetRenderState(rw::ZWRITEENABLE, 0);
+	rw::SetRenderState(rw::ZTESTENABLE, 1);
+	rw::SetRenderState(rw::FOGENABLE, 0);
+	rw::SetRenderState(rw::VERTEXALPHA, 1);
+	bool alphaOn = prim->base.count("ALPHAON") ? atoi(prim->base.at("ALPHAON").c_str()) != 0 : true;
+	int sb = prim->base.count("SRCBLENDID") ? atoi(prim->base.at("SRCBLENDID").c_str()) : 4, db = prim->base.count("DSTBLENDID") ? atoi(prim->base.at("DSTBLENDID").c_str()) : 5;
+	rw::SetRenderState(rw::SRCBLEND, rw::BLENDZERO + (alphaOn ? sb : 1));
+	rw::SetRenderState(rw::DESTBLEND, rw::BLENDZERO + (alphaOn ? db : 0));
+	for (int pass = 0; pass < 4; pass++) {
+		std::vector<rw::RWDEVICE::Im3DVertex> sv;
+		std::vector<rw::uint16> si;
+		for (const FxBillboard &q : bb) {
+			if (q.tex != pass) continue;
+			float ca = std::cos(q.rot), sa = std::sin(q.rot);
+			float ux[4] = {-1, 1, -1, 1}, uy[4] = {1, 1, -1, -1};
+			rw::uint16 base = (rw::uint16)sv.size();
+			for (int c = 0; c < 4; c++) {
+				float rx = (ux[c] * ca - uy[c] * sa) * q.halfX, ry = (ux[c] * sa + uy[c] * ca) * q.halfY;
+				const float *R = q.flat ? q.right : &cm->right.x, *U = q.flat ? q.up : &cm->up.x;
+				rw::RWDEVICE::Im3DVertex iv;
+				iv.setX(q.pos[0] + R[0] * rx + U[0] * ry); iv.setY(q.pos[1] + R[1] * rx + U[1] * ry); iv.setZ(q.pos[2] + R[2] * rx + U[2] * ry);
+				iv.setColor(q.r, q.g, q.b, q.a); iv.setU((ux[c] + 1) * 0.5f); iv.setV((1 - uy[c]) * 0.5f);
+				sv.push_back(iv);
+			}
+			for (int k : {0, 1, 2, 1, 3, 2}) si.push_back((rw::uint16)(base + k));
+			if (sv.size() >= 9000) break;
+		}
+		if (sv.empty()) continue;
+		rw::Texture *t = findTex(prim->base.count(texKeys[pass]) ? prim->base.at(texKeys[pass]) : "NULL");
+		rw::SetRenderStatePtr(rw::TEXTURERASTER, t ? t->raster : nil);
+		rw::im3d::Transform(sv.data(), (rw::int32)sv.size(), nil, rw::im3d::EVERYTHING);
+		rw::im3d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, si.data(), (rw::int32)si.size());
+		rw::im3d::End();
+	}
+	rw::SetRenderState(rw::DESTBLEND, rw::BLENDINVSRCALPHA);
+	rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
+	rw::SetRenderState(rw::ZWRITEENABLE, 1);
+	rw::SetRenderState(rw::VERTEXALPHA, 0);
+}
+
 void DrawRain(float dt, unsigned tms) {
 	auto rainy = [](int w) { return w == 8 || w == 16; };
 	float f = std::fmod(gGameMinutes, 60.0f) / 60.0f;
@@ -3633,6 +3708,7 @@ void Idle(float dt) {
 	DrawWater();
 	DrawRain(dt, (unsigned)(now * 1000.0));
 	DrawSandStorm(dt, (unsigned)(now * 1000.0));
+	DrawFxTest(dt);
 	gCamera->endUpdate();
 	// Test aid: SA_SHOT=<file.tga> SA_SHOTAT=<seconds> writes the back buffer once (the desktop capture of the window comes out white here).
 	static const char *shotPath = getenv("SA_SHOT");

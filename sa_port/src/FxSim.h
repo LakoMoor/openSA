@@ -16,6 +16,7 @@ struct FxBillboard {
 	float rot;              // radians
 	int tex;                // 0..3 index into FxPrim TEXTURE..TEXTURE4
 	bool flat;              // FX_INFO_FLAT: quad in the emitter plane instead of facing the camera
+	float right[3], up[3];  // FX_INFO_FLAT RX..RZ / UX..UZ (valid when flat)
 };
 
 class FxEmitterSim {

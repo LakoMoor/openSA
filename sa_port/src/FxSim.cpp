@@ -102,6 +102,7 @@ void FxEmitterSim::collect(std::vector<FxBillboard> &out) const
 		b.rot = p.rot * 0.0174533f * p.m.rot;
 		b.tex = at ? std::max(0, std::min(3, (int)ch(at, "TEXID", t, 1.0f) - 1)) : 0;
 		b.flat = flat;
+		if (flat) { const FxInfo *fl = prim_.info("FLAT"); const char *rn[3] = {"RX", "RY", "RZ"}, *un[3] = {"UX", "UY", "UZ"}; for (int k = 0; k < 3; k++) { b.right[k] = ch(fl, rn[k], t); b.up[k] = ch(fl, un[k], t); } }
 		out.push_back(b);
 	}
 }
