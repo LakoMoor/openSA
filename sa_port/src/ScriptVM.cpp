@@ -6,6 +6,7 @@
 #include <fstream>
 #include <unordered_map>
 
+volatile uint32_t gDbgIp = 0, gDbgOp = 0, gDbgStage = 0;   // watchdog aid for script_check
 namespace {
 struct CmdInfo {
 	uint16_t op;
@@ -310,6 +311,7 @@ void ScriptVM::runThread(ScmThread &t)
 		int fixed = ci->fixed;
 		if (op == 0x05B6) { t.ip += 128; continue; }
 		if (op == 0x004C) fixed = 1;
+		gDbgIp = t.ip - 2; gDbgOp = op; gDbgStage = 1;
 		static uint16_t lastOps[16]; static uint32_t lastIps[16]; static int lastN = 0;
 		lastOps[lastN % 16] = op; lastIps[lastN % 16] = t.ip - 2; lastN++;
 		if (!readArgs(t, fixed, ci->vararg != 0, args)) {
@@ -319,8 +321,10 @@ void ScriptVM::runThread(ScmThread &t)
 			return;
 		}
 		commandsRun++;
-		if (getenv("SCM_TRACE") && commandsRun < 100000) std::fprintf(stderr, "%u: %04X %s (%zu args)\n", t.ip, op, ci->name, args.size());
+		static const bool trace = getenv("SCM_TRACE") != nullptr;
+		if (trace && commandsRun < 100000) std::fprintf(stderr, "%u: %04X %s (%zu args)\n", t.ip, op, ci->name, args.size());
 		t.notFlag = neg;
+		gDbgStage = 2;
 		if (execute(t, op, neg, args)) {
 			handled[op]++;
 		} else {

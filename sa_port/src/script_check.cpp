@@ -6,8 +6,23 @@
 #include <string>
 extern "C" {}
 #include <cstring>
+extern volatile uint32_t gDbgIp, gDbgOp, gDbgStage;
+#include <thread>
+#include <chrono>
+#include <process.h>
 int main(int argc, char **argv)
 {
+	// watchdog: report where the VM is stuck if no command is executed for 15 s
+	std::thread([] {
+		uint32_t last = 0; int same = 0;
+		for (;;) {
+			std::this_thread::sleep_for(std::chrono::seconds(5));
+			uint32_t cur = gDbgIp * 31 + gDbgOp;
+			if (cur == last) { if (++same >= 3) { std::fprintf(stderr, "WATCHDOG stuck at ip %u op %04X stage %u\n", gDbgIp, gDbgOp, gDbgStage); std::fflush(stderr); _exit(3); } }
+			else same = 0;
+			last = cur;
+		}
+	}).detach();
 	if (argc < 2) { std::printf("usage: script_check <main.scm> [seconds]\n"); return 1; }
 	ScriptVM vm;
 	if (!vm.load(argv[1])) { std::printf("cannot load\n"); return 1; }
