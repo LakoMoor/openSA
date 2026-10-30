@@ -19,6 +19,14 @@ struct RadioStream {
 	// one track of a pack: Ogg starts at entry.offset + sizeof(tTrackInfo)=0x1F84 (CAETrackLoader::GetDataStream, 0x4E0D20)
 	bool openTrack(const TrackTable &t, size_t id);
 	uint64_t lengthFrames() const;
+	// incremental decode: begin(), then read() until it returns 0, end()
+	bool begin();
+	size_t read(int16_t *out, size_t frames); // interleaved frames
+	void end();
+	RadioStream() = default;
+	RadioStream(const RadioStream &) = delete;
+	~RadioStream() { end(); }
+	void *dec = nullptr;
 	// decode up to maxFrames interleaved 16-bit frames starting at the stream start; returns frames decoded
 	size_t decode(std::vector<int16_t> &out, size_t maxFrames) const;
 };

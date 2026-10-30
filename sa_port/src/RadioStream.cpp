@@ -106,3 +106,24 @@ uint64_t RadioStream::lengthFrames() const
 	stb_vorbis_close(v);
 	return n;
 }
+
+bool RadioStream::begin()
+{
+	end();
+	int err = 0;
+	dec = stb_vorbis_open_memory(ogg.data(), (int)ogg.size(), &err, nullptr);
+	return dec != nullptr;
+}
+
+size_t RadioStream::read(int16_t *out, size_t frames)
+{
+	if (!dec) return 0;
+	int r = stb_vorbis_get_samples_short_interleaved((stb_vorbis *)dec, channels, out, (int)(frames * channels));
+	return r > 0 ? (size_t)r : 0;
+}
+
+void RadioStream::end()
+{
+	if (dec) stb_vorbis_close((stb_vorbis *)dec);
+	dec = nullptr;
+}

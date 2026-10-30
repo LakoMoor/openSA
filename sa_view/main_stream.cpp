@@ -32,6 +32,7 @@ namespace rw { namespace d3d { extern IDirect3DDevice9 *d3ddevice; } }
 #include "PathNodes.h"
 #include "AudioBank.h"
 #include "VehiclePhysics.h"
+#include "RadioStream.h"
 #include <sstream>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -1368,6 +1369,103 @@ void UpdateHorn(float dt) {
 	fprintf(gLog, "horn: model %d sound %d pitch %.2f (%.2f s)\n", gCarGens[gDriveGen].model, kHorn[idx].type, pitch, timer);
 }
 
+// Radio, first slice: key R cycles off -> next stream pack -> ... and plays that pack's tracks in table order through one waveOut device. Streams are decrypted/decoded
+// by RadioStream (key and layout from gta-reversed, see PLAN.md). DEVIATIONS: the pack->station mapping/order is NOT the original's (packs ADVERTS/AMBIENCE/BEATS/CUTSCENE/AA are skipped
+// by name, the rest are cycled in StrmPaks.dat order, names are shown in the log only); no DJ/ad/news scheduling, no track shuffling, no per-station volume, no radio-off in non-vehicle
+// state (works on foot too), no tuning static; 32 kHz stereo is played as is.
+struct RadioPlayer {
+	TrackTable table;
+	bool tableOk = false, tried = false;
+	std::vector<int> packs;
+	int cur = -1;                // index into packs, -1 = off
+	size_t track = 0;            // next track id to try
+	RadioStream stream;
+	bool streaming = false;
+	HWAVEOUT h = nullptr;
+	int devRate = 0;
+	WAVEHDR hdr[4] = {};
+	std::vector<int16_t> buf[4];
+	bool primed[4] = {};
+	bool prevKey = false;
+};
+RadioPlayer gRadio;
+constexpr size_t kRadioChunk = 4096;
+
+void StopRadioDevice() {
+	RadioPlayer &r = gRadio;
+	if (!r.h) return;
+	waveOutReset(r.h);
+	for (int i = 0; i < 4; i++) if (r.primed[i]) waveOutUnprepareHeader(r.h, &r.hdr[i], sizeof(WAVEHDR));
+	waveOutClose(r.h);
+	r.h = nullptr; r.devRate = 0;
+	for (int i = 0; i < 4; i++) r.primed[i] = false;
+}
+
+bool RadioNextTrack() {
+	RadioPlayer &r = gRadio;
+	r.stream.end();
+	r.streaming = false;
+	const int pack = r.packs[r.cur];
+	size_t first = r.track, n = r.table.tracks.size();
+	for (size_t k = 0; k < n; k++) {
+		size_t id = (first + k) % n;
+		if (r.table.tracks[id].pack != pack) continue;
+		if (r.stream.openTrack(r.table, id) && r.stream.channels == 2 && r.stream.begin()) {
+			r.track = id + 1;
+			r.streaming = true;
+			if (r.devRate != r.stream.rate) {
+				StopRadioDevice();
+				WAVEFORMATEX fmt = {WAVE_FORMAT_PCM, 2, (DWORD)r.stream.rate, (DWORD)r.stream.rate * 4, 4, 16, 0};
+				if (waveOutOpen(&r.h, WAVE_MAPPER, &fmt, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) { r.h = nullptr; r.streaming = false; return false; }
+				r.devRate = r.stream.rate;
+			}
+			fprintf(gLog, "radio: pack %s track %zu\n", r.table.packs[pack].c_str(), id);
+			return true;
+		}
+	}
+	return false;
+}
+
+void UpdateRadio() {
+	RadioPlayer &r = gRadio;
+	if (getenv("SA_MUTE")) return;
+	bool key = sk::keys['R'];
+	if (key && !r.prevKey) {
+		if (!r.tried) {
+			r.tried = true;
+			r.tableOk = r.table.load(gameDir + "/audio");
+			for (size_t i = 0; i < r.table.packs.size(); i++) {
+				const std::string &n = r.table.packs[i];
+				if (n.empty() || n == "ADVERTS" || n == "AMBIENCE" || n == "BEATS" || n == "CUTSCENE" || n == "AA") continue;
+				r.packs.push_back((int)i);
+			}
+			fprintf(gLog, "radio: table %s, %zu tracks, %zu station packs\n", r.tableOk ? "ok" : "FAILED", r.table.tracks.size(), r.packs.size());
+		}
+		if (r.tableOk && !r.packs.empty()) {
+			r.cur++;
+			if (r.cur >= (int)r.packs.size()) r.cur = -1;
+			if (r.cur < 0) { r.stream.end(); r.streaming = false; StopRadioDevice(); fprintf(gLog, "radio: off\n"); }
+			else { r.track = 0; RadioNextTrack(); }
+		}
+	}
+	r.prevKey = key;
+	if (r.cur < 0 || !r.streaming || !r.h) return;
+	for (int i = 0; i < 4; i++) {
+		WAVEHDR &hd = r.hdr[i];
+		if (r.primed[i] && !(hd.dwFlags & WHDR_DONE)) continue;
+		if (r.primed[i]) waveOutUnprepareHeader(r.h, &hd, sizeof(hd));
+		r.buf[i].assign(kRadioChunk * 2, 0);
+		size_t got = r.stream.read(r.buf[i].data(), kRadioChunk);
+		if (got == 0) { r.primed[i] = false; if (!RadioNextTrack()) return; continue; }
+		hd = {};
+		hd.lpData = (LPSTR)r.buf[i].data();
+		hd.dwBufferLength = (DWORD)(got * 4);
+		waveOutPrepareHeader(r.h, &hd, sizeof(hd));
+		waveOutWrite(r.h, &hd, sizeof(hd));
+		r.primed[i] = true;
+	}
+}
+
 void UpdateFootsteps(float dt) {
 	static float timer = 0.0f;
 	if (!gSfxReady) {
@@ -1531,7 +1629,7 @@ void LoadCarcols() {
 	while (std::getline(f, line)) {
 		size_t h = line.find('#');
 		if (h != std::string::npos) line.resize(h);
-		for (char &c : line) if (c == ',' || c == '\r' || c == '\t') c = ' ';
+		for (char &c : line) if (c == ',' || c == '' || c == '	') c = ' ';
 		char a[64];
 		if (sscanf(line.c_str(), "%63s", a) != 1) continue;
 		std::string w = Lower(a);
@@ -3205,6 +3303,7 @@ void Idle(float dt) {
 	UpdateFootsteps(dt);
 	UpdateHorn(dt);
 	UpdateWeaponSound(dt);
+	UpdateRadio();
 	UpdateEngine();
 	UpdateCars();
 	UpdateAmbientPeds(dt);
