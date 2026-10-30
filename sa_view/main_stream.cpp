@@ -2026,6 +2026,19 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 		out.adhesion = SurfaceAdhesion(mat);
 		return true;
 	};
+	// Hold the car while the world under it is still streaming: no ground within 50 m below and requests pending -> skip the step (the original blocks on loading instead of letting a
+	// vehicle outrun its collision). DEVIATION: the car freezes in place rather than the game waiting; reported once per hold in the log.
+	{
+		float gz0; static bool holding = false;
+		bool noGround = !GroundHeight(gPhys.pos.x, gPhys.pos.y, gPhys.pos.z + 2.0f, 50.0f, gz0);
+		bool loading = !gPending.empty() || gStreamer->PendingCount() != 0;
+		if (noGround && loading) {
+			if (!holding) { holding = true; fprintf(gLog, "physics: holding the car while the ground streams in (pending %zu + %d)%c", gPending.size(), (int)gStreamer->PendingCount(), 10); }
+			gInsts[g.inst].col = ownCol;
+			return;
+		}
+		holding = false;
+	}
 	gPhys.step(dt * 50.0f, in, ground);
 		// Fall guard: the streamer may not have loaded collision under a fast car, so the ground query fails and the car falls through the world. Remember the last state with
 		// >= 3 wheels on the ground and restore it (at rest) once the body is 40 m below it. DEVIATION: the original never loses the world like this (it streams ahead of the vehicle and
