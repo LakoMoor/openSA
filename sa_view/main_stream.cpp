@@ -3324,6 +3324,72 @@ WindState WeatherWind(unsigned timeMs) {
 float gRain = 0.0f;
 int gRainStrength = 0;
 
+// Sandstorm particles: CWeather::AddSandStormParticles (0x72A820, gta-reversed) runs once per 50 Hz frame while the wind is above 1.01 and spawns the fx system prt_sand2 (effects.fxp, read
+// from the file): texture bullethitsmoke (particle.txd), life 5 s * mult 0.2 = 1 s, size 15 +- 7 (SIZEX/SIZEXBIAS) * mult 1.0, random start angle 0..360 deg, spin 20..50 deg/s either way, white * mult
+// (0.67, 0.65, 0.55), alpha 0 -> 255 at 10% of the life -> 0 at the end * mult 0.25, velocity WindDir * 25. Position: camera + forward(xy) * 10 + [-20, 20] xy, z in [-2, 5].
+// DEVIATIONS: plain SRCALPHA/INVSRCALPHA blending (the file's blend ids 4/5 are not mapped), WindDir is the viewer's wind vector (not re-checked against CWeather::WindDir), no culling / LOD,
+// no CullZone / underwater / interior checks, particle count capped at 200.
+void DrawSandStorm(float dt, unsigned tms) {
+	static std::vector<float> pd;   // x y z vx vy vz age life angle spin size
+	static float frameAcc = 0.0f;
+	auto rnd = [](float lo, float hi) { return lo + (hi - lo) * ((float)rand() / (float)RAND_MAX); };
+	WindState ws = WeatherWind(tms);
+	rw::Matrix *cm = &gCamera->getFrame()->matrix;
+	frameAcc += dt * 50.0f;
+	int frames = std::min(3, (int)frameAcc);
+	frameAcc -= (float)frames;
+	if (ws.wind > 1.01f && camPos.z < 900.0f) {
+		float fl = std::sqrt(cm->at.x * cm->at.x + cm->at.y * cm->at.y);
+		float fx = fl > 0.001f ? cm->at.x / fl : 0.0f, fy = fl > 0.001f ? cm->at.y / fl : 1.0f;
+		for (int i = 0; i < frames && pd.size() < 200 * 11; i++) {
+			float spin = rnd(20.0f, 50.0f) * ((rand() & 1) ? 1.0f : -1.0f);
+			float v[11] = {camPos.x + fx * 10.0f + rnd(0.0f, 40.0f) - 20.0f, camPos.y + fy * 10.0f + rnd(0.0f, 40.0f) - 20.0f, camPos.z + rnd(0.0f, 7.0f) - 2.0f,
+			               ws.dir.x * 25.0f, ws.dir.y * 25.0f, ws.dir.z * 25.0f, 0.0f, 1.0f, rnd(0.0f, 360.0f), spin, 15.0f + rnd(-7.0f, 7.0f)};
+			pd.insert(pd.end(), v, v + 11);
+		}
+	}
+	for (size_t k = 0; k < pd.size();) {
+		float *p = &pd[k];
+		p[0] += p[3] * dt; p[1] += p[4] * dt; p[2] += p[5] * dt; p[6] += dt; p[8] += p[9] * dt;
+		if (p[6] > p[7]) { pd.erase(pd.begin() + k, pd.begin() + k + 11); } else k += 11;
+	}
+	if (pd.empty()) return;
+	static rw::Texture *tex = ParticleTex("bullethitsmoke");
+	std::vector<rw::RWDEVICE::Im3DVertex> sv;
+	std::vector<rw::uint16> si;
+	for (size_t k = 0; k + 11 <= pd.size(); k += 11) {
+		const float *p = &pd[k];
+		float t = p[6] / p[7];
+		float a = t < 0.1f ? t / 0.1f : (1.0f - t) / 0.9f;
+		uint8_t al = (uint8_t)(255.0f * a * 0.25f);
+		float hw = p[10] * 0.5f, ca = std::cos(p[8] * 0.0174533f), sa = std::sin(p[8] * 0.0174533f);
+		float ux[4] = {-1, 1, -1, 1}, uy[4] = {1, 1, -1, -1};
+		rw::uint16 base = (rw::uint16)sv.size();
+		for (int c = 0; c < 4; c++) {
+			float rx = (ux[c] * ca - uy[c] * sa) * hw, ry = (ux[c] * sa + uy[c] * ca) * hw;
+			rw::RWDEVICE::Im3DVertex iv;
+			iv.setX(p[0] + cm->right.x * rx + cm->up.x * ry); iv.setY(p[1] + cm->right.y * rx + cm->up.y * ry); iv.setZ(p[2] + cm->right.z * rx + cm->up.z * ry);
+			iv.setColor((uint8_t)(255 * 0.67f), (uint8_t)(255 * 0.65f), (uint8_t)(255 * 0.55f), al); iv.setU((ux[c] + 1) * 0.5f); iv.setV((1 - uy[c]) * 0.5f);
+			sv.push_back(iv);
+		}
+		for (int q : {0, 1, 2, 1, 3, 2}) si.push_back((rw::uint16)(base + q));
+		if (sv.size() >= 9000) break;
+	}
+	rw::SetRenderState(rw::ZWRITEENABLE, 0);
+	rw::SetRenderState(rw::ZTESTENABLE, 1);
+	rw::SetRenderState(rw::FOGENABLE, 0);
+	rw::SetRenderState(rw::SRCBLEND, rw::BLENDSRCALPHA);
+	rw::SetRenderState(rw::DESTBLEND, rw::BLENDINVSRCALPHA);
+	rw::SetRenderState(rw::VERTEXALPHA, 1);
+	rw::SetRenderStatePtr(rw::TEXTURERASTER, tex ? tex->raster : nil);
+	rw::im3d::Transform(sv.data(), (rw::int32)sv.size(), nil, rw::im3d::EVERYTHING);
+	rw::im3d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, si.data(), (rw::int32)si.size());
+	rw::im3d::End();
+	rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
+	rw::SetRenderState(rw::ZWRITEENABLE, 1);
+	rw::SetRenderState(rw::VERTEXALPHA, 0);
+}
+
 void DrawRain(float dt, unsigned tms) {
 	auto rainy = [](int w) { return w == 8 || w == 16; };
 	float f = std::fmod(gGameMinutes, 60.0f) / 60.0f;
@@ -3562,6 +3628,7 @@ void Idle(float dt) {
 	gWorld->render();
 	DrawWater();
 	DrawRain(dt, (unsigned)(now * 1000.0));
+	DrawSandStorm(dt, (unsigned)(now * 1000.0));
 	gCamera->endUpdate();
 	// Test aid: SA_SHOT=<file.tga> SA_SHOTAT=<seconds> writes the back buffer once (the desktop capture of the window comes out white here).
 	static const char *shotPath = getenv("SA_SHOT");
