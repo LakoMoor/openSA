@@ -2006,6 +2006,7 @@ void StartDriving(int gen) {
 }
 
 void CarVsTraffic();
+double gNow = 0, gShotFxTime = -1;   // test aid SA_SHOTONFX=1: the SA_SHOT screenshot is taken 0.25 s after the first collision/blood fx
 void FxBurst(const char *name, const float pos[3], int count);
 void CarCollisionFx(const float contact[3], float impulse);
 void FxAddBlood(const float pos[3], const float dir[3], int amount);
@@ -3435,6 +3436,7 @@ void CarCollisionFx(const float contact[3], float imp) {
 	float minDmg = gPhys.mass / 1500.0f * 25.0f;
 	float sq = gPhys.moveSpeed.x * gPhys.moveSpeed.x + gPhys.moveSpeed.y * gPhys.moveSpeed.y + gPhys.moveSpeed.z * gPhys.moveSpeed.z;
 	if (!(imp > minDmg) || !(sq > 0.02f / 50.0f)) return;
+	if (gShotFxTime < 0) gShotFxTime = gNow + 0.25;
 	float dx = contact[0] - camPos.x, dy = contact[1] - camPos.y, dz = contact[2] - camPos.z;
 	if (dx * dx + dy * dy + dz * dz > 22500.0f) return;
 	float spd = std::sqrt(sq), dir[3] = {gPhys.moveSpeed.x / spd, gPhys.moveSpeed.y / spd, gPhys.moveSpeed.z / spd};
@@ -3463,6 +3465,7 @@ void CarCollisionFx(const float contact[3], float imp) {
 void FxAddBlood(const float pos[3], const float dir[3], int amount) {
 	float dx = pos[0] - camPos.x, dy = pos[1] - camPos.y, dz = pos[2] - camPos.z;
 	if (dx * dx + dy * dy + dz * dz >= 625.0f) return;
+	if (gShotFxTime < 0) gShotFxTime = gNow + 0.25;
 	FxEmitterSim *sm = FxSimFor("prt_blood", false);
 	if (!sm) return;
 	auto r = []() { return -1.0f + 2.0f * ((float)rand() / (float)RAND_MAX); };
@@ -3706,6 +3709,7 @@ void Idle(float dt) {
 	if (getenv("SA_HOLDW") && holdT >= (float)atof(getenv("SA_HOLDW"))) sk::keys['W'] = true;
 	static auto start = std::chrono::steady_clock::now();
 	double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+	gNow = now;
 	bool anyMove = sk::keys['W'] || sk::keys['A'] || sk::keys['S'] || sk::keys['D'];
 	float speed = (gWalk ? ClipSpeed(PedClip(anyMove)) : (sk::keys[sk::KEY_LSHIFT] ? 200.0f : 40.0f)) * dt;
 	float yr = camYaw * 3.14159265f / 180.0f;
@@ -3806,7 +3810,7 @@ void Idle(float dt) {
 	// Test aid: SA_SHOT=<file.tga> SA_SHOTAT=<seconds> writes the back buffer once (the desktop capture of the window comes out white here).
 	static const char *shotPath = getenv("SA_SHOT");
 	static bool shotDone = false;
-	if (shotPath && !shotDone && now >= (getenv("SA_SHOTAT") ? atof(getenv("SA_SHOTAT")) : 8.0)) {
+	if (shotPath && !shotDone && (getenv("SA_SHOTONFX") ? (gShotFxTime >= 0 && now >= gShotFxTime) : now >= (getenv("SA_SHOTAT") ? atof(getenv("SA_SHOTAT")) : 8.0))) {
 		shotDone = true;
 		IDirect3DSurface9 *rt = nullptr, *sys = nullptr;
 		if (SUCCEEDED(rw::d3d::d3ddevice->GetRenderTarget(0, &rt))) {
