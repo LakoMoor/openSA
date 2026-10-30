@@ -2053,8 +2053,18 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 		else if (haveGood && gPhys.pos.z < lastGood.pos.z - 40.0f) {
 			{ float gz = 0; bool ok = GroundHeight(gPhys.pos.x, gPhys.pos.y, gPhys.pos.z + 60.0f, 400.0f, gz);
 			  fprintf(gLog, "physics: guard at (%.1f %.1f %.1f) from good z %.1f, ground query from +60 m: %s %.1f\n", gPhys.pos.x, gPhys.pos.y, gPhys.pos.z, lastGood.pos.z, ok ? "hit" : "none", gz); }
+			{ float g3 = 0; bool ok3 = GroundHeight(lastGood.pos.x, lastGood.pos.y, lastGood.pos.z + 2.0f, 30.0f, g3); fprintf(gLog, "physics: at the last good spot (%.1f %.1f %.1f) ground now: %s %.1f; streamer pending/active see status line\n", lastGood.pos.x, lastGood.pos.y, lastGood.pos.z, ok3 ? "hit" : "NONE", g3); }
 			gPhys = lastGood; gPhys.moveSpeed = {0, 0, 0}; gPhys.turnSpeed = {0, 0, 0};
 			fprintf(gLog, "physics: fell through unloaded ground, restored the last grounded state\n");
+		}
+		{   // diagnostics for the fall-through bug: log the moment the car leaves the ground (>= 3 wheels -> 0) with what the ground queries around it return
+			static int prevWheels = 4, logged = 0;
+			if (prevWheels >= 3 && gPhys.wheelsOnGround == 0 && logged < 12) {
+				logged++;
+				float g1 = 0, g2 = 0; bool ok1 = GroundHeight(gPhys.pos.x, gPhys.pos.y, gPhys.pos.z + 2.0f, 30.0f, g1), ok2 = GroundHeight(gPhys.pos.x, gPhys.pos.y, gPhys.pos.z + 60.0f, 120.0f, g2);
+				fprintf(gLog, "physics: airborne at (%.1f %.1f %.1f) speed %.0f km/h vz %.2f up.z %.2f, ground from +2 m: %s %.1f, from +60 m: %s %.1f\n", gPhys.pos.x, gPhys.pos.y, gPhys.pos.z, gPhys.forwardSpeed() * 50.0f * 3.6f, gPhys.moveSpeed.z * 50.0f, gPhys.up.z, ok1 ? "hit" : "none", g1, ok2 ? "hit" : "none", g2);
+			}
+			prevWheels = gPhys.wheelsOnGround;
 		}
 	// world collision: five spheres along the car axis; wall contacts push the body out and apply the static-B branch of CPhysical::ApplyCollision (reVC):
 	// j = -(1+e) * (v_point . n) * GetMass(point, n), move + turn force along n (z scaled 0.3 for non-flat normals)
