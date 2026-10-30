@@ -2469,6 +2469,15 @@ std::vector<TrafficCar> gTraffic;
 // is applied against a temporary body. DEVIATIONS: the traffic car's physics body is a copy of the player's (same mass/handling, not its own model's), traffic stays kinematic (keeps
 // its path speed of 10 m/s, takes no impulse), no damage on the traffic car is shown, the contact normal is 2D (ignores height).
 void CarVsTraffic() {
+	// test aid SA_TRAFFICHIT=1: once the driven car moves, put the first traffic car 3 m ahead of it, facing it (forces a head-on contact)
+	static bool forced = false;
+	if (!forced && getenv("SA_TRAFFICHIT") && !gTraffic.empty() && gPhys.forwardSpeed() * 50.0f > 3.0f) {
+		forced = true;
+		fprintf(gLog, "traffic hit test: placing traffic car 0 of %zu ahead of the driven car\n", gTraffic.size());
+		TrafficCar &t0 = gTraffic[0];
+		t0.pos = {gPhys.pos.x + gPhys.fwd.x * 3.0f, gPhys.pos.y + gPhys.fwd.y * 3.0f, gPhys.pos.z};
+		t0.heading = std::atan2(-gPhys.fwd.x, gPhys.fwd.y) + 3.14159265f;
+	}
 	for (const TrafficCar &o : gTraffic) {
 		float dx = o.pos.x - gPhys.pos.x, dy = o.pos.y - gPhys.pos.y;
 		if (dx * dx + dy * dy > 36.0f || std::fabs(o.pos.z - gPhys.pos.z) > 2.5f) continue;
