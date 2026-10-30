@@ -198,6 +198,17 @@ bool ScriptVM::execute(ScmThread &t, uint16_t op, bool neg, std::vector<ScmArg> 
 		return true;
 	}
 	case 0x090F: return true;   // MARK_STREAMED_SCRIPT_AS_NO_LONGER_NEEDED: streamed scripts are not unloaded here
+	// Environment queries answered with fixed values. DEVIATIONS: no real clock/day/language/city tracking, no garages, no weapon inventory, no player position in the VM,
+	// so the locate/area/garage/weapon conditions are always false.
+	case 0x01BD: ref(t, args[0]) = (int32_t)m_now; return true;      // GET_GAME_TIMER (ms)
+	case 0x07D0: ref(t, args[0]) = 0; return true;                   // GET_CURRENT_DAY_OF_WEEK (fixed)
+	case 0x077E: ref(t, args[0]) = 0; return true;                   // GET_AREA_VISIBLE (outside)
+	case 0x09FB: ref(t, args[0]) = 0; return true;                   // GET_CURRENT_LANGUAGE (0 = American)
+	case 0x0842: ref(t, args[1]) = 1; return true;                   // GET_CITY_PLAYER_IS_IN (1 = Los Santos, game start)
+	case 0x0652: ref(t, args[1]) = 0; return true;                   // GET_INT_STAT (all stats 0)
+	case 0x04AE: ref(t, args[0]) = getI(t, args[1]); return true;    // SET_VAR_INT_TO_CONSTANT
+	case 0x03B0: case 0x0491: case 0x00FE: case 0x00EC: case 0x00A3:
+		condResult(t, false, neg); return true;                      // IS_GARAGE_OPEN / HAS_CHAR_GOT_WEAPON / LOCATE_CHAR_ANY_MEANS_3D/2D / IS_CHAR_IN_AREA_2D
 	case 0x09E8: ref(t, args[1]) = 0; return true;   // GET_CHAR_AREA_VISIBLE: always outside any interior (area 0); DEVIATION: interiors are not tracked
 	case 0x0002: t.ip = label(t, getI(t, args[0])); return true;
 	case 0x004D: if (!t.condFlag) t.ip = label(t, getI(t, args[0])); return true;
