@@ -2007,6 +2007,7 @@ void StartDriving(int gen) {
 
 void CarVsTraffic();
 void FxBurst(const char *name, const float pos[3], int count);
+void CarCollisionFx(const float contact[3], float impulse);
 
 void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 	CarGen &g = gCarGens[gDriveGen];
@@ -2068,7 +2069,7 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 				vp::V3 pt = {c.x - n.x * 0.9f - gPhys.pos.x, c.y - n.y * 0.9f - gPhys.pos.y, c.z - gPhys.pos.z};
 				float before = gPhys.health, imp = gPhys.hitStatic(pt, n);
 				if (imp > 0.0f && gPhys.health < before) fprintf(gLog, "car damage: impulse %.1f loss %.1f health %.1f\n", imp, before - gPhys.health, gPhys.health);
-				if (imp > 5.0f) { float wp[3] = {gPhys.pos.x + pt.x, gPhys.pos.y + pt.y, gPhys.pos.z + pt.z}; FxBurst("prt_spark", wp, std::min(12, 2 + (int)(imp / 20.0f))); }   // DEVIATION: trigger/count invented (the original uses Fx_c::AddSparks, not read)
+				{ float wp[3] = {gPhys.pos.x + pt.x, gPhys.pos.y + pt.y, gPhys.pos.z + pt.z}; CarCollisionFx(wp, imp); }
 			}
 		}
 	}
@@ -2649,7 +2650,7 @@ void CarVsTraffic() {
 			float imp = gPhys.hitCar(other, {gPhys.fwd.x * 0.7f * a - nx, gPhys.fwd.y * 0.7f * a - ny, 0}, {other.fwd.x * 0.7f * b + nx, other.fwd.y * 0.7f * b + ny, 0}, {nx, ny, 0});
 			gPhys.pos.x += nx * (2.0f - d); gPhys.pos.y += ny * (2.0f - d);
 			if (imp > 0.0f) fprintf(gLog, "car-car hit: impulse %.1f loss %.1f health %.1f\n", imp, before - gPhys.health, gPhys.health);
-			if (imp > 5.0f) { float wp[3] = {(gPhys.pos.x + o.pos.x) * 0.5f, (gPhys.pos.y + o.pos.y) * 0.5f, gPhys.pos.z + 0.5f}; FxBurst("prt_spark", wp, std::min(12, 2 + (int)(imp / 20.0f))); FxBurst("prt_collisionsmoke", wp, 3); }   // DEVIATION: trigger/count invented
+			{ float wp[3] = {(gPhys.pos.x + o.pos.x) * 0.5f, (gPhys.pos.y + o.pos.y) * 0.5f, gPhys.pos.z + 0.5f}; CarCollisionFx(wp, imp); }   // only the player car runs it (the traffic car would run its own copy)
 		}
 	}
 }
@@ -3422,6 +3423,37 @@ FxEmitterSim *FxSimFor(const std::string &name, bool emitting) {
 void FxBurst(const char *name, const float pos[3], int count) {
 	FxEmitterSim *sm = FxSimFor(name, false);
 	for (int i = 0; sm && i < count && sm->alive() < 2000; i++) sm->addParticle(pos, nullptr, FxMult());
+}
+// CAutomobile::dmgDrawCarCollidingParticles (0x6A6DC0, gta-reversed) called from CAutomobile::VehicleDamage when the impact intensity exceeds mass/1500*25 and the move speed^2 > 0.02/50:
+// Fx_c::AddSparks(contact, dir = normalised move speed, force = |speed| * -10, amount = ((int8)intensity / 10 + 4) % 64, across = move speed, SPARK2 = prt_spark_2, spread 0.3, life 1)
+// (AddSparks 0x49F040 read from the exe: per spark velocity = (dir + rnd(+-spread)) * force, position along -across * timestep * (1 - i/amount), FxPrtMult life = life * 0.8, skipped beyond
+// 150 m of the camera) plus prt_smoke_huge puffs (max(1, |speed * timestep| * 4), mult 0.4 0.4 0.4 0.6 size 0.4) at lerp(car, contact, 0.7).
+// DEVIATIONS: timestep 1 (50 fps), AddSparks' timeSince argument and the 15 m cull flag [0xb7cb4c] not decoded, no debris (AddDebris not wired), the intensity is the contact impulse of my physics,
+// the "on screen" test is skipped.
+void CarCollisionFx(const float contact[3], float imp) {
+	float minDmg = gPhys.mass / 1500.0f * 25.0f;
+	float sq = gPhys.moveSpeed.x * gPhys.moveSpeed.x + gPhys.moveSpeed.y * gPhys.moveSpeed.y + gPhys.moveSpeed.z * gPhys.moveSpeed.z;
+	if (!(imp > minDmg) || !(sq > 0.02f / 50.0f)) return;
+	float dx = contact[0] - camPos.x, dy = contact[1] - camPos.y, dz = contact[2] - camPos.z;
+	if (dx * dx + dy * dy + dz * dz > 22500.0f) return;
+	float spd = std::sqrt(sq), dir[3] = {gPhys.moveSpeed.x / spd, gPhys.moveSpeed.y / spd, gPhys.moveSpeed.z / spd};
+	int amount = (((int8_t)(int)imp) / 10 + 4) % 64;
+	float force = spd * -10.0f, spread = 0.3f, ts = 1.0f;
+	if (FxEmitterSim *sp = FxSimFor("prt_spark_2", false)) {
+		for (int i = 0; i < amount && sp->alive() < 2000; i++) {
+			auto r = [&]() { return -spread + 2.0f * spread * ((float)rand() / (float)RAND_MAX); };
+			float t = 1.0f - (float)i / (float)amount;
+			float v[3] = {(dir[0] + r()) * force, (dir[1] + r()) * force, (dir[2] + r()) * force};
+			float ps[3] = {contact[0] - gPhys.moveSpeed.x * ts * t, contact[1] - gPhys.moveSpeed.y * ts * t, contact[2] - gPhys.moveSpeed.z * ts * t};
+			FxMult m; m.life = 0.8f;
+			sp->addParticle(ps, v, m);
+		}
+	}
+	if (FxEmitterSim *sm = FxSimFor("prt_smoke_huge", false)) {
+		int n = std::max(1, (int)(spd * ts * 4.0f));
+		float fp[3] = {gPhys.pos.x + (contact[0] - gPhys.pos.x) * 0.7f, gPhys.pos.y + (contact[1] - gPhys.pos.y) * 0.7f, gPhys.pos.z + (contact[2] - gPhys.pos.z) * 0.7f}, zv[3] = {0, 0, 0};
+		for (int i = 0; i < n && sm->alive() < 2000; i++) { FxMult m; m.r = m.g = m.b = 0.4f; m.a = 0.6f; m.size = 0.4f; sm->addParticle(fp, zv, m); }
+	}
 }
 void DrawFxSim(const FxPrim &prim, const std::vector<FxBillboard> &bb) {
 	if (bb.empty()) return;
