@@ -1370,8 +1370,7 @@ void UpdateHorn(float dt) {
 }
 
 // Radio, first slice: key R cycles off -> next stream pack -> ... and plays that pack's tracks in table order through one waveOut device. Streams are decrypted/decoded
-// by RadioStream (key and layout from gta-reversed, see PLAN.md). DEVIATIONS: the pack->station mapping/order is NOT the original's (packs ADVERTS/AMBIENCE/BEATS/CUTSCENE/AA are skipped
-// by name, the rest are cycled in StrmPaks.dat order, names are shown in the log only); no DJ/ad/news scheduling, no track shuffling, no per-station volume, no radio-off in non-vehicle
+// by RadioStream (key and layout from gta-reversed, see PLAN.md). Station order and pack names follow eRadioID in gta-reversed (CH=Playback FM, CO=K-Rose, CR=K-DST, DS=Bounce FM, HC=SF-UR, MH=Radio Los Santos, MR=Radio X, NJ=CSR, RE=K-Jah West, RG=Master Sounds, TK=WCTR; AA emergency skipped; mapping not re-read in the exe). DEVIATIONS: no DJ/ad/news scheduling, no track shuffling, no per-station volume, no radio-off in non-vehicle
 // state (works on foot too), no tuning static; 32 kHz stereo is played as is.
 struct RadioPlayer {
 	TrackTable table;
@@ -1434,11 +1433,10 @@ void UpdateRadio() {
 		if (!r.tried) {
 			r.tried = true;
 			r.tableOk = r.table.load(gameDir + "/audio");
-			for (size_t i = 0; i < r.table.packs.size(); i++) {
-				const std::string &n = r.table.packs[i];
-				if (n.empty() || n == "ADVERTS" || n == "AMBIENCE" || n == "BEATS" || n == "CUTSCENE" || n == "AA") continue;
-				r.packs.push_back((int)i);
-			}
+			static const char *kStations[][2] = {{"CH", "Playback FM"}, {"CO", "K-Rose"}, {"CR", "K-DST"}, {"DS", "Bounce FM"}, {"HC", "SF-UR"}, {"MH", "Radio Los Santos"}, {"MR", "Radio X"}, {"NJ", "CSR 103.9"}, {"RE", "K-Jah West"}, {"RG", "Master Sounds 98.3"}, {"TK", "WCTR"}};
+			for (auto &st : kStations)
+				for (size_t i = 0; i < r.table.packs.size(); i++)
+					if (r.table.packs[i] == st[0]) { r.packs.push_back((int)i); break; }
 			fprintf(gLog, "radio: table %s, %zu tracks, %zu station packs\n", r.tableOk ? "ok" : "FAILED", r.table.tracks.size(), r.packs.size());
 		}
 		if (r.tableOk && !r.packs.empty()) {
