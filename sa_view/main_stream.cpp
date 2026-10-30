@@ -1913,6 +1913,15 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 		return true;
 	};
 	gPhys.step(dt * 50.0f, in, ground);
+		// Fall guard: the streamer may not have loaded collision under a fast car, so the ground query fails and the car falls through the world. Remember the last state with
+		// >= 3 wheels on the ground and restore it (at rest) once the body is 40 m below it. DEVIATION: the original never loses the world like this (it streams ahead of the vehicle and
+		// blocks on loading); a real fall of more than 40 m is also reset.
+		static vp::CarPhysics lastGood; static bool haveGood = false;
+		if (gPhys.wheelsOnGround >= 3) { lastGood = gPhys; haveGood = true; }
+		else if (haveGood && gPhys.pos.z < lastGood.pos.z - 40.0f) {
+			gPhys = lastGood; gPhys.moveSpeed = {0, 0, 0}; gPhys.turnSpeed = {0, 0, 0};
+			fprintf(gLog, "physics: fell through unloaded ground, restored the last grounded state\n");
+		}
 	// world collision: five spheres along the car axis; wall contacts push the body out and apply the static-B branch of CPhysical::ApplyCollision (reVC):
 	// j = -(1+e) * (v_point . n) * GetMass(point, n), move + turn force along n (z scaled 0.3 for non-flat normals)
 	{
