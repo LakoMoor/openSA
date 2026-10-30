@@ -3528,12 +3528,15 @@ void DrawFxAll(float dt) {
 	FxEmitterSim *testSim = nullptr;
 	if (testName) {
 		testSim = FxSimFor(testName, true);
-		if (!testInit) {
+		if (testSim) { if (getenv("SA_FXSIZE")) testSim->defMult.size = (float)atof(getenv("SA_FXSIZE")); if (getenv("SA_FXALPHA")) testSim->defMult.a = (float)atof(getenv("SA_FXALPHA")); }
+		static float settle = 0.0f; settle += dt;   // the viewer spawns high and drops: place the effect only once the camera has landed
+		if (!testInit && settle > 15.0f) {
 			testInit = true;
 			rw::Matrix *c0 = &gCamera->getFrame()->matrix;
 			org[0] = camPos.x + c0->at.x * 6.0f; org[1] = camPos.y + c0->at.y * 6.0f; org[2] = camPos.z + (getenv("SA_FXZ") ? (float)atof(getenv("SA_FXZ")) : -0.5f);
 			fprintf(gLog, "SA_FX %s: %s, origin %.1f %.1f %.1f\n", testName, testSim ? "running" : "NOT FOUND", org[0], org[1], org[2]);
 		}
+		if (!testInit) return;
 		burst += dt;
 		if (testSim && !gFx.proj.find(testName)->prims[0].info("EMRATE") && burst > 0.5f) {
 			burst = 0.0f;
@@ -3550,6 +3553,7 @@ void DrawFxAll(float dt) {
 		std::vector<FxBillboard> bb;
 		sm->collect(bb);
 		const FxSystem *fs = gFx.proj.find(kv.first);
+		if (sm == testSim && !bb.empty()) { static float dl = 0; dl += dt; if (dl > 2.0f) { dl = 0; fprintf(gLog, "SA_FX first: pos %.1f %.1f %.1f half %.2f rgba %d %d %d %d tex %d cam %.1f %.1f %.1f\n", bb[0].pos[0], bb[0].pos[1], bb[0].pos[2], bb[0].halfX, bb[0].r, bb[0].g, bb[0].b, bb[0].a, bb[0].tex, camPos.x, camPos.y, camPos.z); } }
 		if (!bb.empty() && fs) DrawFxSim(fs->prims[0], bb);
 	}
 	{ static float lt = 0; lt += dt; if (lt > 2.0f && !gFx.sims.empty()) { lt = 0; for (auto &kv : gFx.sims) if (kv.second && kv.second->alive()) fprintf(gLog, "fx %s: %zu alive\n", kv.first.c_str(), kv.second->alive()); } }

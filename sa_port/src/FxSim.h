@@ -27,6 +27,7 @@ public:
 	void collect(std::vector<FxBillboard> &out) const;
 	size_t alive() const { return parts_.size(); }
 	float time = 0;
+	FxMult defMult;         // multipliers of rate-emitted particles
 	bool emitting = true;   // false: only addParticle() creates particles (event effects)
 	unsigned seed = 12345;
 private:
