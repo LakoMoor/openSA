@@ -301,7 +301,23 @@ float CarPhysics::hitStatic(const V3 &pt, const V3 &n) {
 	applyMoveForce(f); applyTurnForce(f, pt);
 	// VehicleDamage (0x6A8052): (impulse - mass/1500*25) * damageMult * 0.6 * collForceMult, /2 for the player vehicle. collision path calls VehicleDamage(0, ...): collForceMult 1, minDmg mass/1500*25, intensity = m_fDamageIntensity = the ApplyCollision impulse (gta-reversed Automobile.cpp:2816-2830)
 	float minDmg = mass / 1500.0f * 25.0f;
-	if (imp > minDmg) health -= (imp - minDmg) * damageMult * 0.6f / 2.0f;
+	if (imp > minDmg) health -= (imp - minDmg) * damageMult * 0.6f / (isPlayer ? 2.0f : 1.0f);
+	return imp;
+}
+
+// Car vs car (reVC CPhysical::ApplyCollision for two bodies; elasticity 0.05 ASSUMED like hitStatic): equal and opposite impulse along n, each car takes VehicleDamage with the
+// same impulse and its own mass / damage multiplier. DEVIATIONS: no friction impulse along the contact plane, no separate "collision with vehicle" damage multipliers from the exe.
+float CarPhysics::hitCar(CarPhysics &o, const V3 &pa, const V3 &pb, const V3 &n) {
+	float sp = dot(getSpeed(pa) - o.getSpeed(pb), n);
+	if (sp >= 0.0f) return 0.0f;
+	float imp = -(1.0f + 0.05f) * sp / (1.0f / massAt(pa, n) + 1.0f / o.massAt(pb, n));
+	V3 f = n * imp;
+	applyMoveForce(f); applyTurnForce(f, pa);
+	o.applyMoveForce(f * -1.0f); o.applyTurnForce(f * -1.0f, pb);
+	for (CarPhysics *c : {this, &o}) {
+		float minDmg = c->mass / 1500.0f * 25.0f;
+		if (imp > minDmg) c->health -= (imp - minDmg) * c->damageMult * 0.6f / (c->isPlayer ? 2.0f : 1.0f);
+	}
 	return imp;
 }
 

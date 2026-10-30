@@ -67,6 +67,9 @@ public:
 	float health = 1000.0f, damageMult = 1.0f;
 	// Static-wall hit (CPhysical::ApplyCollision static-B branch, reVC) + CAutomobile::VehicleDamage health loss; returns the impulse, 0 if moving away. `point` relative to the car centre.
 	float hitStatic(const V3 &point, const V3 &n);
+	// two-body collision: pointA/pointB are offsets from each car's own position, n points from B to A; returns the impulse (0 if separating)
+	float hitCar(CarPhysics &other, const V3 &pointA, const V3 &pointB, const V3 &n);
+	bool isPlayer = true;   // VehicleDamage halves damage for the player's vehicle
 	void applyForce(const V3 &f, const V3 &point);   // CPhysical::ApplyForce(.., true)
 	void applyMoveForce(const V3 &j) { moveSpeed += j / mass; }
 	void applyTurnForce(const V3 &j, const V3 &point) { turnSpeed += cross(point - mul3(com), j) / turnMass; }

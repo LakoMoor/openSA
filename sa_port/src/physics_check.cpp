@@ -31,4 +31,11 @@ int main(int argc, char **argv)
 		float imp = c.hitStatic({0, 2.3f, 0}, {0, -1, 0});
 		std::printf("crash %.0f km/h: impulse %.1f health %.1f speed after %.1f km/h\n", kmh, imp, c.health, c.forwardSpeed() * 50.0f * 3.6f);
 	}
+	// head-on car vs car at 60 km/h each (second car is a non-player copy)
+	{
+		vp::CarPhysics a, b; a.init(h, wp, 0.7f); b.init(h, wp, 0.7f); a.place({0, 0, 0.5f}, 0); b.place({0, 4.6f, 0.5f}, 3.14159265f); b.isPlayer = false;
+		a.moveSpeed = a.fwd * (60.0f / 3.6f / 50.0f); b.moveSpeed = b.fwd * (60.0f / 3.6f / 50.0f);
+		float imp = a.hitCar(b, {0, 2.3f, 0}, {0, 2.3f, 0}, {0, -1, 0});
+		std::printf("car-car 60+60 km/h: impulse %.1f healthA %.1f healthB %.1f speedA %.1f speedB %.1f km/h%c", imp, a.health, b.health, a.forwardSpeed() * 50.0f * 3.6f, b.forwardSpeed() * 50.0f * 3.6f, 10);
+	}
 }
