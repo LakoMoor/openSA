@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "VehiclePhysics.h"
 #include <cstdio>
 #include <cstdlib>
@@ -23,6 +24,20 @@ int main(int argc, char **argv)
 	}
 	in.gas = 0; in.brake = 1.0f;
 	for (int sec = 1; sec <= 6; sec++) { for (int t = 0; t < 50; t++) car.step(1.0f, in, flat); std::printf("brake t=%ds speed %.1f km/h\n", sec, car.forwardSpeed() * 50.0f * 3.6f); }
+	// buoyancy test: car dropped from 2 m onto a sea of height 0 with no ground (deep water): it must settle near the surface instead of sinking
+	{
+		vp::CarPhysics c; c.init(h, wp, 0.7f); c.place({0, 0, 2.0f}, 0);
+		vp::GroundFn none = [](float, float, float, float, vp::GroundHit &) { return false; };
+		auto sea = [](float, float, float &z) { z = 0.0f; return true; };
+		vp::V3 bmin = {-1.1f, 1.4f * -1.25f, -0.8f}, bmax = {1.1f, 1.4f * 1.25f, 1.05f};
+		float bc = h.mass * 0.8f / h.percentSubmerged;
+		float minz = 1e9f;
+		for (int t = 0; t < 50 * 20; t++) {
+			c.step(1.0f, vp::Input(), none); c.buoyancy(1.0f, sea, bmin, bmax, bc); minz = std::min(minz, c.pos.z);
+			if (t % 100 == 99) std::printf("buoyancy t=%ds z %.2f vz %.3f m/s drowning %d\n", (t + 1) / 50, c.pos.z, c.moveSpeed.z * 50.0f, (int)c.drowning);
+		}
+		std::printf("buoyancy: percentSubmerged %.0f constant %.2f lowest z %.2f\n", h.percentSubmerged, bc, minz);
+	}
 	// crash test: 60 km/h head-on into a wall plane at the front bumper, then 20 km/h
 	for (float kmh : {20.0f, 60.0f, 100.0f}) {
 		vp::CarPhysics c; c.init(h, wp, 0.7f); c.place({0, 0, 0.5f}, 0);

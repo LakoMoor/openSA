@@ -321,4 +321,52 @@ float CarPhysics::hitCar(CarPhysics &o, const V3 &pa, const V3 &pb, const V3 &n)
 	return imp;
 }
 
+// cBuoyancy::PreCalcSetup + SimpleCalcBuoyancy (0x6C2B90, 0x6C3B00, gta-reversed Buoyancy.cpp) for a plain car, then CalcBuoyancyForce and the CAutomobile::ProcessBuoyancy (0x6A8C00) response.
+// DEVIATIONS: flat water (no waves), no splash particles/audio, no heli/boat/plane branches, no ped drowning, the engine-off / buoyancy-constant decay of a drowning car is not ported.
+bool CarPhysics::buoyancy(float ticks, const std::function<bool(float, float, float &)> &waterAt, const V3 &bmin, const V3 &bmax, float buoyancyConst)
+{
+	float wl;
+	if (!waterAt(pos.x, pos.y, wl)) { drowning = false; return false; }
+	V3 center = (bmax - bmin) * 0.5f;
+	float sc = (center.z > center.x && center.z > center.y) ? 1.0f / center.z : (center.y > center.x && center.y > center.z) ? 1.0f / center.y : 1.0f / center.x;
+	V3 normCenter = center * sc;
+	float immersion = 0, numChecked = 1.0f;
+	V3 turnPoint = {0, 0, 0};
+	for (int ix = 0; ix < 3; ix++) for (int iy = 0; iy < 3; iy++) {
+		V3 off = {bmin.x + center.x * ix, bmin.y + center.y * iy, 0.0f};
+		V3 t = mul3(off);
+		float zl = 0;
+		if (!waterAt(pos.x + t.x, pos.y + t.y, zl)) zl = wl;
+		float z = zl - (t.z + pos.z);   // water height relative to the point, in world z
+		if (z > bmax.z) z = bmax.z;
+		else if (z < bmin.z) continue;   // completely above water: contributes nothing
+		float d = std::fabs(z - bmin.z);   // fPointVolMultiplier = 1
+		if (d < 0.0f) continue;
+		immersion += d;
+		V3 tp = {off.x * normCenter.x, off.y * normCenter.y, (z + bmin.z) * normCenter.z * 0.5f};
+		float newC = 1.0f / numChecked, oldC = 1.0f - newC;
+		turnPoint = tp * (newC * d) + turnPoint * oldC;
+		numChecked += 1.0f;
+	}
+	float height = bmax.z - bmin.z;
+	immersion /= 9.0f * height;
+	if (immersion <= 0.0f) { drowning = false; return false; }
+	immersion = std::min(immersion, 1.0f);
+	float cur = immersion * buoyancyConst * ticks;
+	V3 force = {0, 0, cur};
+	float moveForceZ = mass * moveSpeed.z;
+	if (moveForceZ > cur * 4.0f) force.z = std::max(0.0f, cur - moveForceZ);
+	// CAutomobile::ProcessBuoyancy
+	float ts = std::max(0.01f, ticks), usedMass = mass / 125.0f;
+	float fz = force.z / (ts * usedMass);
+	if (usedMass > buoyancyConst) fz *= 1.05f * usedMass / buoyancyConst;
+	float mult = std::max(0.5f, 1.0f - fz / 20.0f), sp = std::pow(mult, ts);
+	moveSpeed = moveSpeed * sp; turnSpeed = turnSpeed * sp;
+	V3 tpw = mul3(turnPoint);
+	applyMoveForce(force); applyTurnForce(force, tpw);
+	if (fz >= 1.0f) { drowning = true; moveSpeed.z = std::max(-0.1f, moveSpeed.z); }
+	else drowning = false;
+	return true;
+}
+
 }

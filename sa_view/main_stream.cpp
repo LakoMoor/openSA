@@ -2045,6 +2045,15 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 		holding = false;
 	}
 	gPhys.step(dt * 50.0f, in, ground);
+	if (!getenv("SA_NOBUOY") && gDriveHandling && gDriveHandling->percentSubmerged > 0) {   // cBuoyancy port (VehiclePhysics.cpp). DEVIATION: the collision box is ESTIMATED from the wheel dummies (x +-0.25 beyond the wheels, y wheels*1.25, z from wheel centre - 0.35 to +1.5 above), flat water.
+		float xm = 0, ymin = 1e9f, ymax = -1e9f, zmin = 1e9f;
+		for (int i = 0; i < 4; i++) { xm = std::max(xm, std::fabs(gPhys.wheelLocal[i].x)); ymin = std::min(ymin, gPhys.wheelLocal[i].y); ymax = std::max(ymax, gPhys.wheelLocal[i].y); zmin = std::min(zmin, gPhys.wheelLocal[i].z); }
+		vp::V3 bmin = {-(xm + 0.25f), ymin * 1.25f, zmin - 0.35f}, bmax = {xm + 0.25f, ymax * 1.25f, zmin - 0.35f + 1.85f};
+		static bool wasWet = false;
+		bool wet = gPhys.buoyancy(dt * 50.0f, [](float x, float y, float &z) { return WaterLevelAt(x, y, z); }, bmin, bmax, gDriveHandling->mass * 0.8f / gDriveHandling->percentSubmerged);
+		if (wet != wasWet) fprintf(gLog, "physics: car %s water (z %.1f, drowning %d)\n", wet ? "touches" : "left", gPhys.pos.z, (int)gPhys.drowning);
+		wasWet = wet;
+	}
 		// Fall guard: the streamer may not have loaded collision under a fast car, so the ground query fails and the car falls through the world. Remember the last state with
 		// >= 3 wheels on the ground and restore it (at rest) once the body is 40 m below it. DEVIATION: the original never loses the world like this (it streams ahead of the vehicle and
 		// blocks on loading); a real fall of more than 40 m is also reset.
@@ -2053,7 +2062,8 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 		else if (haveGood && gPhys.pos.z < lastGood.pos.z - 40.0f) {
 			{ float gz = 0; bool ok = GroundHeight(gPhys.pos.x, gPhys.pos.y, gPhys.pos.z + 60.0f, 400.0f, gz);
 			  fprintf(gLog, "physics: guard at (%.1f %.1f %.1f) from good z %.1f, ground query from +60 m: %s %.1f\n", gPhys.pos.x, gPhys.pos.y, gPhys.pos.z, lastGood.pos.z, ok ? "hit" : "none", gz); }
-			{ float g3 = 0; bool ok3 = GroundHeight(lastGood.pos.x, lastGood.pos.y, lastGood.pos.z + 2.0f, 30.0f, g3); fprintf(gLog, "physics: at the last good spot (%.1f %.1f %.1f) ground now: %s %.1f; streamer pending/active see status line\n", lastGood.pos.x, lastGood.pos.y, lastGood.pos.z, ok3 ? "hit" : "NONE", g3); }
+			{ float g3 = 0; bool ok3 = GroundHeight(lastGood.pos.x, lastGood.pos.y, lastGood.pos.z + 2.0f, 30.0f, g3); { float wz = 0; bool okw = WaterLevelAt(gPhys.pos.x, gPhys.pos.y, wz); fprintf(gLog, "physics: water.dat at the guard spot: %s %.1f\n", okw ? "poly" : "NONE", wz); }
+			fprintf(gLog, "physics: at the last good spot (%.1f %.1f %.1f) ground now: %s %.1f; streamer pending/active see status line\n", lastGood.pos.x, lastGood.pos.y, lastGood.pos.z, ok3 ? "hit" : "NONE", g3); }
 			gPhys = lastGood; gPhys.moveSpeed = {0, 0, 0}; gPhys.turnSpeed = {0, 0, 0};
 			fprintf(gLog, "physics: fell through unloaded ground, restored the last grounded state\n");
 		}

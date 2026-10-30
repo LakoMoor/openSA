@@ -76,6 +76,10 @@ public:
 	float massAt(const V3 &pos, const V3 &dir) const { V3 c = cross(pos - mul3(com), dir); return 1.0f / (dot(c, c) / turnMass + 1.0f / mass); }
 	float driveAcceleration(float gas, float velocity, bool allWheelsOnGround);
 	void processWheel(const V3 &wf, const V3 &wr, const V3 &contactSpeed, const V3 &contactPoint, int onGround, float thrust, float brake, float adhesion, int wheel, float gas);
+	// cBuoyancy::SimpleCalcBuoyancy/CalcBuoyancyForce + CAutomobile::ProcessBuoyancy for a non-boat car. waterAt(x, y, z) gives the flat water height. Returns true while touching water.
+	// bmin/bmax = collision box in car space. Handling buoyancy constant = mass * 0.8 / percentSubmerged.
+	bool buoyancy(float ticks, const std::function<bool(float, float, float &)> &waterAt, const V3 &bmin, const V3 &bmax, float buoyancyConst);
+	bool drowning = false;
 	void orthonormalise();
 };
 
