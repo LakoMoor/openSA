@@ -3327,7 +3327,7 @@ int gRainStrength = 0;
 // Sandstorm particles: CWeather::AddSandStormParticles (0x72A820, gta-reversed) runs once per 50 Hz frame while the wind is above 1.01 and spawns the fx system prt_sand2 (effects.fxp, read
 // from the file): texture bullethitsmoke (particle.txd), life 5 s * mult 0.2 = 1 s, size 15 +- 7 (SIZEX/SIZEXBIAS) * mult 1.0, random start angle 0..360 deg, spin 20..50 deg/s either way, white * mult
 // (0.67, 0.65, 0.55), alpha 0 -> 255 at 10% of the life -> 0 at the end * mult 0.25, velocity WindDir * 25. Position: camera + forward(xy) * 10 + [-20, 20] xy, z in [-2, 5].
-// DEVIATIONS: plain SRCALPHA/INVSRCALPHA blending (the file's blend ids 4/5 are not mapped), WindDir is the viewer's wind vector (not re-checked against CWeather::WindDir), no culling / LOD,
+// DEVIATIONS: blend ids 4/5 = SRCALPHA/INVSRCALPHA mapped via the g_BlendFunctions table of FxEmitterBP.cpp, WindDir is the viewer's wind vector (not re-checked against CWeather::WindDir), no culling / LOD,
 // no CullZone / underwater / interior checks, particle count capped at 200.
 void DrawSandStorm(float dt, unsigned tms) {
 	static std::vector<float> pd;   // x y z vx vy vz age life angle spin size
@@ -3473,8 +3473,8 @@ void DrawRain(float dt, unsigned tms) {
 			if (sp[k].age > sp[k].life) { sp[k] = sp.back(); sp.pop_back(); } else k++;
 		}
 		// prt_splash (effects.fxp, read from the file): one emitter, textures splash_up1 -> splash_up2 (animated 1 -> 2 over the first half of the life), life 3.0..3.5 s * life multiplier 0.03
-		// (CWeather::AddRain passes FxPrtMult 1,1,1, alpha 0.25, size 0.02, life 0.03) = 0.09..0.105 s, size 2 -> 8 over the life * 0.02 = 4..16 cm, alpha 255 -> 0 * 0.25. DEVIATIONS: drawn as camera-facing
-		// quads with plain SRCALPHA/INVSRCALPHA blending (the file asks for blend ids 4/1, not mapped), lit/fogged by nothing, no LOD fade (LODSTART 30 / LODEND 50), no culling.
+		// (CWeather::AddRain passes FxPrtMult 1,1,1, alpha 0.25, size 0.02, life 0.03) = 0.09..0.105 s, size 2 -> 8 over the life * 0.02 = 4..16 cm, alpha 255 -> 0 * 0.25. DEVIATIONS (blend now mapped: 4/1 = SRCALPHA/ONE, i.e. additive): drawn as camera-facing
+		// quads, lit/fogged by nothing, no LOD fade (LODSTART 30 / LODEND 50), no culling.
 		static rw::TexDictionary *fxTxd = nullptr; static bool fxTried = false;
 		if (!fxTried) {
 			fxTried = true;
@@ -3491,6 +3491,7 @@ void DrawRain(float dt, unsigned tms) {
 		};
 		static rw::Texture *tUp[2] = {fxTex("splash_up1"), fxTex("splash_up2")};
 		rw::Matrix *cm = &gCamera->getFrame()->matrix;
+		rw::SetRenderState(rw::DESTBLEND, rw::BLENDONE);   // SRCBLENDID 4 / DSTBLENDID 1 = SRCALPHA / ONE (g_BlendFunctions table, FxEmitterBP.cpp: ZERO, ONE, SRCCOLOR, INVSRCCOLOR, SRCALPHA, INVSRCALPHA, ...)
 		for (int pass = 0; pass < 2; pass++) {
 			std::vector<rw::RWDEVICE::Im3DVertex> sv;
 			std::vector<rw::uint16> si;
@@ -3520,6 +3521,7 @@ void DrawRain(float dt, unsigned tms) {
 			}
 			flush();
 		}
+		rw::SetRenderState(rw::DESTBLEND, rw::BLENDINVSRCALPHA);
 		rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
 		{ static float lt = 0; lt += dt; if (lt > 2.0f) { lt = 0; fprintf(gLog, "rain: gRain %.2f strength %d splashes alive %zu\n", gRain, gRainStrength, sp.size()); } }
 	}
