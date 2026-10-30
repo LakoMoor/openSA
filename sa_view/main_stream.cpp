@@ -1405,17 +1405,25 @@ void StopRadioDevice() {
 	for (int i = 0; i < 4; i++) r.primed[i] = false;
 }
 
+// Track choice: CAERadioTrackManager::ChooseTracksForStation (0x4EB180, gta-reversed) plays a single music track in ~85% of its picks (0.95 * 0.9) and otherwise queues ident / DJ banter /
+// advert / intro / outro clips. The per-station id lists that classify those clips live in the exe and are NOT read yet, so DEVIATION: only music is played, approximated as the pack's
+// tracks of at least 2 MB (~110 s at the ~150 kbps these streams use), picked at random without repeating any of the last 6 (the original also keeps a music history, AddMusicTrackIndexToHistory).
 bool RadioNextTrack() {
 	RadioPlayer &r = gRadio;
 	r.stream.end();
 	r.streaming = false;
 	const int pack = r.packs[r.cur];
-	size_t first = r.track, n = r.table.tracks.size();
-	for (size_t k = 0; k < n; k++) {
-		size_t id = (first + k) % n;
-		if (r.table.tracks[id].pack != pack) continue;
+	static std::vector<size_t> history;
+	std::vector<size_t> cand;
+	for (size_t id = 0; id < r.table.tracks.size(); id++)
+		if (r.table.tracks[id].pack == pack && r.table.tracks[id].size >= 2000000u && std::find(history.begin(), history.end(), id) == history.end()) cand.push_back(id);
+	for (int attempt = 0; attempt < 8 && !cand.empty(); attempt++) {
+		size_t pick = (size_t)(rand() % (int)cand.size());
+		size_t id = cand[pick];
+		cand.erase(cand.begin() + pick);
 		if (r.stream.openTrack(r.table, id) && r.stream.channels == 2 && r.stream.begin()) {
-			r.track = id + 1;
+			history.push_back(id);
+			if (history.size() > 6) history.erase(history.begin());
 			r.streaming = true;
 			if (r.devRate != r.stream.rate) {
 				StopRadioDevice();
@@ -1423,7 +1431,7 @@ bool RadioNextTrack() {
 				if (waveOutOpen(&r.h, WAVE_MAPPER, &fmt, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) { r.h = nullptr; r.streaming = false; return false; }
 				r.devRate = r.stream.rate;
 			}
-			fprintf(gLog, "radio: pack %s track %zu\n", r.table.packs[pack].c_str(), id);
+			fprintf(gLog, "radio: pack %s track %zu (%u bytes)\n", r.table.packs[pack].c_str(), id, r.table.tracks[id].size);
 			return true;
 		}
 	}
