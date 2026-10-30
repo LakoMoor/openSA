@@ -183,6 +183,20 @@ bool ScriptVM::execute(ScmThread &t, uint16_t op, bool neg, std::vector<ScmArg> 
 	switch (op) {
 	case 0x0000: return true;
 	case 0x0001: t.wakeMs = m_now + (uint32_t)getI(t, args[0]); return true;
+	// SWITCH_START (0871): value, total case count, flag, default label, then 7 (case value, label) slots; SWITCH_CONTINUED (0872): 9 more slots each. Unused slots are padding
+	// (-1, default label). Layout read from the arguments main.scm passes; the jump happens once all `total` cases have been collected. Labels resolve like GOTO's.
+	case 0x0871: case 0x0872: {
+		size_t first = op == 0x0871 ? 4 : 0;
+		if (op == 0x0871) { t.swValue = getI(t, args[0]); t.swTotal = getI(t, args[1]); t.swDefault = getI(t, args[3]); t.swCases.clear(); }
+		for (size_t k = first; k + 1 < args.size() && (int32_t)t.swCases.size() < t.swTotal; k += 2)
+			t.swCases.push_back({getI(t, args[k]), getI(t, args[k + 1])});
+		if ((int32_t)t.swCases.size() >= t.swTotal) {
+			int32_t target = t.swDefault;
+			for (auto &c : t.swCases) if (c.first == t.swValue) { target = c.second; break; }
+			t.ip = label(t, target);
+		}
+		return true;
+	}
 	case 0x0002: t.ip = label(t, getI(t, args[0])); return true;
 	case 0x004D: if (!t.condFlag) t.ip = label(t, getI(t, args[0])); return true;
 	case 0x004E: t.active = false; return true;

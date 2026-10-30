@@ -27,6 +27,8 @@ struct ScmThread {
 	std::vector<uint32_t> stack;
 	int32_t locals[34] = {};
 	std::string name;
+	int32_t swValue = 0, swTotal = 0, swDefault = 0;   // SWITCH_START / SWITCH_CONTINUED state
+	std::vector<std::pair<int32_t, int32_t>> swCases;
 	bool isMission = false;
 	uint32_t base = 0;      // mission scripts: negative labels are relative to this offset
 };
