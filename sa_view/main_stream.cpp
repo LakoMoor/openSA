@@ -3325,13 +3325,18 @@ WindState WeatherWind(unsigned timeMs) {
 float gRain = 0.0f;
 int gRainStrength = 0;
 
-// Sandstorm particles: CWeather::AddSandStormParticles (0x72A820, gta-reversed) runs once per 50 Hz frame while the wind is above 1.01 and spawns the fx system prt_sand2 (effects.fxp, read
-// from the file): texture bullethitsmoke (particle.txd), life 5 s * mult 0.2 = 1 s, size 15 +- 7 (SIZEX/SIZEXBIAS) * mult 1.0, random start angle 0..360 deg, spin 20..50 deg/s either way, white * mult
+// Sandstorm particles: CWeather::AddSandStormParticles (0x72A820, gta-reversed) runs once per 50 Hz frame while the wind is above 1.01 and spawns the fx system prt_sand2 (effects.fxp, now simulated by FxEmitterSim; read// from the file): texture bullethitsmoke (particle.txd), life 5 s * mult 0.2 = 1 s, size 15 +- 7 (SIZEX/SIZEXBIAS) * mult 1.0, random start angle 0..360 deg, spin 20..50 deg/s either way, white * mult
 // (0.67, 0.65, 0.55), alpha 0 -> 255 at 10% of the life -> 0 at the end * mult 0.25, velocity WindDir * 25. Position: camera + forward(xy) * 10 + [-20, 20] xy, z in [-2, 5].
 // DEVIATIONS: blend ids 4/5 = SRCALPHA/INVSRCALPHA mapped via the g_BlendFunctions table of FxEmitterBP.cpp, WindDir is the viewer's wind vector (not re-checked against CWeather::WindDir), no culling / LOD,
 // no CullZone / underwater / interior checks, particle count capped at 200.
 void DrawSandStorm(float dt, unsigned tms) {
-	static std::vector<float> pd;   // x y z vx vy vz age life angle spin size
+	static FxProject proj; static FxEmitterSim *sim = nullptr; static bool tried = false;
+	if (!tried) {
+		tried = true;
+		if (proj.load(gameDir + "/models/effects.fxp")) { const FxSystem *fs = proj.find("prt_sand2"); if (fs && !fs->prims.empty()) sim = new FxEmitterSim(fs->prims[0], *fs); }
+		fprintf(gLog, "sandstorm: prt_sand2 %s\n", sim ? "simulated by FxEmitterSim" : "missing");
+	}
+	if (!sim) return;
 	static float frameAcc = 0.0f;
 	auto rnd = [](float lo, float hi) { return lo + (hi - lo) * ((float)rand() / (float)RAND_MAX); };
 	WindState ws = WeatherWind(tms);
@@ -3342,38 +3347,33 @@ void DrawSandStorm(float dt, unsigned tms) {
 	if (ws.wind > 1.01f && camPos.z < 900.0f) {
 		float fl = std::sqrt(cm->at.x * cm->at.x + cm->at.y * cm->at.y);
 		float fx = fl > 0.001f ? cm->at.x / fl : 0.0f, fy = fl > 0.001f ? cm->at.y / fl : 1.0f;
-		for (int i = 0; i < frames && pd.size() < 200 * 11; i++) {
-			float spin = rnd(20.0f, 50.0f) * ((rand() & 1) ? 1.0f : -1.0f);
-			float v[11] = {camPos.x + fx * 10.0f + rnd(0.0f, 40.0f) - 20.0f, camPos.y + fy * 10.0f + rnd(0.0f, 40.0f) - 20.0f, camPos.z + rnd(0.0f, 7.0f) - 2.0f,
-			               ws.dir.x * 25.0f, ws.dir.y * 25.0f, ws.dir.z * 25.0f, 0.0f, 1.0f, rnd(0.0f, 360.0f), spin, 15.0f + rnd(-7.0f, 7.0f)};
-			pd.insert(pd.end(), v, v + 11);
+		for (int i = 0; i < frames && sim->alive() < 200; i++) {
+			float pp[3] = {camPos.x + fx * 10.0f + rnd(0.0f, 40.0f) - 20.0f, camPos.y + fy * 10.0f + rnd(0.0f, 40.0f) - 20.0f, camPos.z + rnd(0.0f, 7.0f) - 2.0f};
+			float vv[3] = {ws.dir.x * 25.0f, ws.dir.y * 25.0f, ws.dir.z * 25.0f};
+			FxMult m; m.r = 0.67f; m.g = 0.65f; m.b = 0.55f; m.a = 0.25f; m.life = 0.2f;
+			sim->addParticle(pp, vv, m);
 		}
 	}
-	for (size_t k = 0; k < pd.size();) {
-		float *p = &pd[k];
-		p[0] += p[3] * dt; p[1] += p[4] * dt; p[2] += p[5] * dt; p[6] += dt; p[8] += p[9] * dt;
-		if (p[6] > p[7]) { pd.erase(pd.begin() + k, pd.begin() + k + 11); } else k += 11;
-	}
-	if (pd.empty()) return;
+	float o0[3] = {0, 0, 0};
+	sim->update(dt, o0);
+	std::vector<FxBillboard> bb;
+	sim->collect(bb);
+	if (bb.empty()) return;
 	static rw::Texture *tex = ParticleTex("bullethitsmoke");
 	std::vector<rw::RWDEVICE::Im3DVertex> sv;
 	std::vector<rw::uint16> si;
-	for (size_t k = 0; k + 11 <= pd.size(); k += 11) {
-		const float *p = &pd[k];
-		float t = p[6] / p[7];
-		float a = t < 0.1f ? t / 0.1f : (1.0f - t) / 0.9f;
-		uint8_t al = (uint8_t)(255.0f * a * 0.25f);
-		float hw = p[10], ca = std::cos(p[8] * 0.0174533f), sa = std::sin(p[8] * 0.0174533f);
+	for (const FxBillboard &q : bb) {
+		float hw = q.halfX, ca = std::cos(q.rot), sa = std::sin(q.rot);
 		float ux[4] = {-1, 1, -1, 1}, uy[4] = {1, 1, -1, -1};
 		rw::uint16 base = (rw::uint16)sv.size();
 		for (int c = 0; c < 4; c++) {
 			float rx = (ux[c] * ca - uy[c] * sa) * hw, ry = (ux[c] * sa + uy[c] * ca) * hw;
 			rw::RWDEVICE::Im3DVertex iv;
-			iv.setX(p[0] + cm->right.x * rx + cm->up.x * ry); iv.setY(p[1] + cm->right.y * rx + cm->up.y * ry); iv.setZ(p[2] + cm->right.z * rx + cm->up.z * ry);
-			iv.setColor((uint8_t)(255 * 0.67f), (uint8_t)(255 * 0.65f), (uint8_t)(255 * 0.55f), al); iv.setU((ux[c] + 1) * 0.5f); iv.setV((1 - uy[c]) * 0.5f);
+			iv.setX(q.pos[0] + cm->right.x * rx + cm->up.x * ry); iv.setY(q.pos[1] + cm->right.y * rx + cm->up.y * ry); iv.setZ(q.pos[2] + cm->right.z * rx + cm->up.z * ry);
+			iv.setColor(q.r, q.g, q.b, q.a); iv.setU((ux[c] + 1) * 0.5f); iv.setV((1 - uy[c]) * 0.5f);
 			sv.push_back(iv);
 		}
-		for (int q : {0, 1, 2, 1, 3, 2}) si.push_back((rw::uint16)(base + q));
+		for (int k : {0, 1, 2, 1, 3, 2}) si.push_back((rw::uint16)(base + k));
 		if (sv.size() >= 9000) break;
 	}
 	rw::SetRenderState(rw::ZWRITEENABLE, 0);

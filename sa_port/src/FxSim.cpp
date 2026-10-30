@@ -18,6 +18,7 @@ float FxEmitterSim::rnd(float a, float b)
 void FxEmitterSim::step(P &p, float dt) const
 {
 	const FxInfo *f = prim_.info("FORCE");
+	p.rot += p.spin * dt;
 	float t = p.life > 0 ? p.age / p.life : 1.0f;
 	if (f) { p.vel[0] += ch(f, "FORCEX", t) * dt; p.vel[1] += ch(f, "FORCEY", t) * dt; p.vel[2] += ch(f, "FORCEZ", t) * dt; }
 	for (int k = 0; k < 3; k++) p.pos[k] += p.vel[k] * dt;
@@ -34,6 +35,12 @@ void FxEmitterSim::spawn(const float origin[3], const float *velOverride, const 
 	p.life = ((rnd(0, 1) * 2 - 1) * lb + lf) * m.life;
 	if (p.life <= 0) return;
 	p.m = m;
+	p.biasX = rnd(-1, 1); p.biasY = rnd(-1, 1);
+	if (const FxInfo *rs = prim_.info("ROTSPEED")) {   // degrees per second, either direction (MINCW..MAXCW or MINCCW..MAXCCW)
+		bool cw = rnd(0, 1) < 0.5f;
+		float lo = ch(rs, cw ? "MINCW" : "MINCCW", T), hi = ch(rs, cw ? "MAXCW" : "MAXCCW", T);
+		p.spin = (lo + (hi - lo) * rnd(0, 1)) * (cw ? 1.0f : -1.0f);
+	}
 	p.rr = (uint8_t)rnd(0, 255); p.rg = (uint8_t)rnd(0, 255); p.rb = (uint8_t)rnd(0, 255);
 	p.rot = rnd(0, 1) * (ch(rot, "ANGLEMAX", T) - ch(rot, "ANGLEMIN", T)) + ch(rot, "ANGLEMIN", T);
 	float radius = ch(size, "RADIUS", T), v[3];
@@ -89,10 +96,10 @@ void FxEmitterSim::collect(std::vector<FxBillboard> &out) const
 		float t = p.life > 0 ? p.age / p.life : 1.0f;
 		FxBillboard b{};
 		for (int k = 0; k < 3; k++) b.pos[k] = p.pos[k];
-		b.halfX = ch(sz, "SIZEX", t, 1.0f) * p.m.size; b.halfY = ch(sz, "SIZEY", t, 1.0f) * p.m.size;
+		b.halfX = (ch(sz, "SIZEX", t, 1.0f) + ch(sz, "SIZEXBIAS", t) * p.biasX) * p.m.size; b.halfY = (ch(sz, "SIZEY", t, 1.0f) + ch(sz, "SIZEYBIAS", t) * p.biasY) * p.m.size;
 		auto cl = [](float v) { return (uint8_t)std::max(0.0f, std::min(255.0f, v)); };
 		b.r = cl(ch(col, "RED", t, 255) * p.m.r); b.g = cl(ch(col, "GREEN", t, 255) * p.m.g); b.b = cl(ch(col, "BLUE", t, 255) * p.m.b); b.a = cl(ch(col, "ALPHA", t, 255) * p.m.a);
-		b.rot = p.rot;
+		b.rot = p.rot * 0.0174533f * p.m.rot;
 		b.tex = at ? std::max(0, std::min(3, (int)ch(at, "TEXID", t, 1.0f) - 1)) : 0;
 		b.flat = flat;
 		out.push_back(b);
