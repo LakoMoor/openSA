@@ -27,6 +27,7 @@ public:
 	void collect(std::vector<FxBillboard> &out) const;
 	size_t alive() const { return parts_.size(); }
 	float time = 0;
+	bool emitting = true;   // false: only addParticle() creates particles (event effects)
 	unsigned seed = 12345;
 private:
 	struct P { float pos[3], vel[3], age, life, rot, spin, biasX, biasY; FxMult m; uint8_t rr, rg, rb; };

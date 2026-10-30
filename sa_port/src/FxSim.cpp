@@ -81,7 +81,7 @@ void FxEmitterSim::addParticle(const float pos[3], const float *velOverride, con
 
 void FxEmitterSim::update(float dt, const float origin[3])
 {
-	emit_ += ch(prim_.info("EMRATE"), "RATE", time) * dt;
+	if (emitting) emit_ += ch(prim_.info("EMRATE"), "RATE", time) * dt;
 	while (emit_ >= 1.0f) { spawn(origin, nullptr, FxMult()); emit_ -= 1.0f; }
 	for (P &p : parts_) step(p, dt);
 	parts_.erase(std::remove_if(parts_.begin(), parts_.end(), [](const P &p) { return p.age >= p.life; }), parts_.end());

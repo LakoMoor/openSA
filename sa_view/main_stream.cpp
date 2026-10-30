@@ -2006,6 +2006,7 @@ void StartDriving(int gen) {
 }
 
 void CarVsTraffic();
+void FxBurst(const char *name, const float pos[3], int count);
 
 void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 	CarGen &g = gCarGens[gDriveGen];
@@ -2067,6 +2068,7 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 				vp::V3 pt = {c.x - n.x * 0.9f - gPhys.pos.x, c.y - n.y * 0.9f - gPhys.pos.y, c.z - gPhys.pos.z};
 				float before = gPhys.health, imp = gPhys.hitStatic(pt, n);
 				if (imp > 0.0f && gPhys.health < before) fprintf(gLog, "car damage: impulse %.1f loss %.1f health %.1f\n", imp, before - gPhys.health, gPhys.health);
+				if (imp > 5.0f) { float wp[3] = {gPhys.pos.x + pt.x, gPhys.pos.y + pt.y, gPhys.pos.z + pt.z}; FxBurst("prt_spark", wp, std::min(12, 2 + (int)(imp / 20.0f))); }   // DEVIATION: trigger/count invented (the original uses Fx_c::AddSparks, not read)
 			}
 		}
 	}
@@ -2546,6 +2548,7 @@ void UpdateAmbientPeds(float dt) {
 					vp::V3 f = n * imp;
 					gPhys.applyMoveForce(f); gPhys.applyTurnForce(f, rel);
 					fprintf(gLog, "car-ped hit: impulse %.1f car speed %.1f km/h\n", imp, gPhys.forwardSpeed() * 50.0f * 3.6f);
+					{ float bp[3] = {p.pos.x, p.pos.y, p.pos.z}; FxBurst("prt_blood", bp, 20); }   // DEVIATION: trigger/count invented (the original uses Fx_c::AddBlood, not read)
 					gone = true;
 				}
 			}
@@ -2646,6 +2649,7 @@ void CarVsTraffic() {
 			float imp = gPhys.hitCar(other, {gPhys.fwd.x * 0.7f * a - nx, gPhys.fwd.y * 0.7f * a - ny, 0}, {other.fwd.x * 0.7f * b + nx, other.fwd.y * 0.7f * b + ny, 0}, {nx, ny, 0});
 			gPhys.pos.x += nx * (2.0f - d); gPhys.pos.y += ny * (2.0f - d);
 			if (imp > 0.0f) fprintf(gLog, "car-car hit: impulse %.1f loss %.1f health %.1f\n", imp, before - gPhys.health, gPhys.health);
+			if (imp > 5.0f) { float wp[3] = {(gPhys.pos.x + o.pos.x) * 0.5f, (gPhys.pos.y + o.pos.y) * 0.5f, gPhys.pos.z + 0.5f}; FxBurst("prt_spark", wp, std::min(12, 2 + (int)(imp / 20.0f))); FxBurst("prt_collisionsmoke", wp, 3); }   // DEVIATION: trigger/count invented
 		}
 	}
 }
@@ -3391,37 +3395,40 @@ void DrawSandStorm(float dt, unsigned tms) {
 	rw::SetRenderState(rw::VERTEXALPHA, 0);
 }
 
-// Test aid SA_FX=<system name> (e.g. prt_wake): runs that effects.fxp system's first primitive (FxEmitterSim) 6 m in front of the start camera and draws it with its own
-// blend ids (g_BlendFunctions order == librw BLENDZERO + id), texture from particle.txd/effectsPC.txd, camera-facing quads or FX_INFO_FLAT quads. Systems without EMRATE get a burst
-// of particles every 0.5 s. DEVIATIONS: all the FxEmitterSim ones (forces only, no friction/wind...), no LOD fade, no lighting.
-void DrawFxTest(float dt) {
-	static const char *name = getenv("SA_FX");
-	if (!name) return;
-	static FxProject proj; static FxEmitterSim *sim = nullptr; static bool tried = false; static float org[3]; static const FxPrim *prim = nullptr;
-	static rw::TexDictionary *efTxd = nullptr;
-	if (!tried) {
-		tried = true;
-		if (proj.load(gameDir + "/models/effects.fxp")) { const FxSystem *fs = proj.find(name); if (fs && !fs->prims.empty()) { prim = &fs->prims[0]; sim = new FxEmitterSim(*prim, *fs); } }
-		std::ifstream f(gameDir + "/models/effectsPC.txd", std::ios::binary);
-		std::vector<uint8_t> bb((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-		if (!bb.empty()) efTxd = ReadTxd(bb);
-		rw::Matrix *c0 = &gCamera->getFrame()->matrix;
-		org[0] = camPos.x + c0->at.x * 6.0f; org[1] = camPos.y + c0->at.y * 6.0f; org[2] = camPos.z + (getenv("SA_FXZ") ? (float)atof(getenv("SA_FXZ")) : -0.5f);
-		fprintf(gLog, "SA_FX %s: %s, origin %.1f %.1f %.1f\n", name, sim ? "running" : "NOT FOUND", org[0], org[1], org[2]);
-	}
-	if (!sim) return;
-	static float burst = 0.0f;
-	burst += dt;
-	if (!prim->info("EMRATE") && burst > 0.5f) { burst = 0.0f; { FxMult m; if (getenv("SA_FXSIZE")) m.size = (float)atof(getenv("SA_FXSIZE")); if (getenv("SA_FXALPHA")) m.a = (float)atof(getenv("SA_FXALPHA")); sim->addParticle(org, nullptr, m); } }
-	sim->update(dt, org);
-	std::vector<FxBillboard> bb;
-	sim->collect(bb);
-	{ static float lt = 0; lt += dt; if (lt > 2.0f) { lt = 0; fprintf(gLog, "SA_FX %s: %zu alive\n", name, bb.size()); } }
+// Generic effects.fxp player: FxBurst() spawns particles of a system's first primitive (FxEmitterSim, emission by EMDIR/EMANGLE/EMSPEED...), DrawFxAll() simulates and draws all of them with the
+// primitive's own blend ids (g_BlendFunctions order == librw BLENDZERO + id), textures from particle.txd/effectsPC.txd, camera-facing quads or FX_INFO_FLAT quads. DEVIATIONS: FxEmitterSim limits
+// (forces only, no friction/wind...), no LOD fade, no lighting, one primitive per system, which game events spawn which effect is INVENTED (see the FxBurst call sites).
+struct FxPlay { FxProject proj; std::map<std::string, FxEmitterSim *> sims; rw::TexDictionary *efTxd = nullptr; bool tried = false; };
+FxPlay gFx;
+void FxEnsure() {
+	if (gFx.tried) return;
+	gFx.tried = true;
+	bool ok = gFx.proj.load(gameDir + "/models/effects.fxp");
+	std::ifstream f(gameDir + "/models/effectsPC.txd", std::ios::binary);
+	std::vector<uint8_t> bb((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+	if (!bb.empty()) gFx.efTxd = ReadTxd(bb);
+	fprintf(gLog, "fx: effects.fxp %s (%zu systems)\n", ok ? "loaded" : "missing", gFx.proj.systems.size());
+}
+FxEmitterSim *FxSimFor(const std::string &name, bool emitting) {
+	FxEnsure();
+	auto it = gFx.sims.find(name);
+	if (it != gFx.sims.end()) return it->second;
+	const FxSystem *fs = gFx.proj.find(name);
+	FxEmitterSim *sm = nullptr;
+	if (fs && !fs->prims.empty()) { sm = new FxEmitterSim(fs->prims[0], *fs); sm->emitting = emitting; }
+	gFx.sims[name] = sm;
+	return sm;
+}
+void FxBurst(const char *name, const float pos[3], int count) {
+	FxEmitterSim *sm = FxSimFor(name, false);
+	for (int i = 0; sm && i < count && sm->alive() < 2000; i++) sm->addParticle(pos, nullptr, FxMult());
+}
+void DrawFxSim(const FxPrim &prim, const std::vector<FxBillboard> &bb) {
 	if (bb.empty()) return;
 	auto findTex = [&](const std::string &n) -> rw::Texture * {
 		if (n == "NULL") return nullptr;
-		if (rw::Texture *t = ParticleTex(Lower(n.c_str()).c_str())) return t;
-		if (efTxd) FORLIST(lnk, efTxd->textures) { rw::Texture *t = rw::Texture::fromDict(lnk); if (Lower(t->name) == Lower(n.c_str())) return t; }
+		if (rw::Texture *t = ParticleTex(Lower(n).c_str())) return t;
+		if (gFx.efTxd) FORLIST(lnk, gFx.efTxd->textures) { rw::Texture *t = rw::Texture::fromDict(lnk); if (Lower(t->name) == Lower(n)) return t; }
 		return nullptr;
 	};
 	rw::Matrix *cm = &gCamera->getFrame()->matrix;
@@ -3430,8 +3437,8 @@ void DrawFxTest(float dt) {
 	rw::SetRenderState(rw::ZTESTENABLE, 1);
 	rw::SetRenderState(rw::FOGENABLE, 0);
 	rw::SetRenderState(rw::VERTEXALPHA, 1);
-	bool alphaOn = prim->base.count("ALPHAON") ? atoi(prim->base.at("ALPHAON").c_str()) != 0 : true;
-	int sb = prim->base.count("SRCBLENDID") ? atoi(prim->base.at("SRCBLENDID").c_str()) : 4, db = prim->base.count("DSTBLENDID") ? atoi(prim->base.at("DSTBLENDID").c_str()) : 5;
+	bool alphaOn = prim.base.count("ALPHAON") ? atoi(prim.base.at("ALPHAON").c_str()) != 0 : true;
+	int sb = prim.base.count("SRCBLENDID") ? atoi(prim.base.at("SRCBLENDID").c_str()) : 4, db = prim.base.count("DSTBLENDID") ? atoi(prim.base.at("DSTBLENDID").c_str()) : 5;
 	rw::SetRenderState(rw::SRCBLEND, rw::BLENDZERO + (alphaOn ? sb : 1));
 	rw::SetRenderState(rw::DESTBLEND, rw::BLENDZERO + (alphaOn ? db : 0));
 	for (int pass = 0; pass < 4; pass++) {
@@ -3454,7 +3461,7 @@ void DrawFxTest(float dt) {
 			if (sv.size() >= 9000) break;
 		}
 		if (sv.empty()) continue;
-		rw::Texture *t = findTex(prim->base.count(texKeys[pass]) ? prim->base.at(texKeys[pass]) : "NULL");
+		rw::Texture *t = findTex(prim.base.count(texKeys[pass]) ? prim.base.at(texKeys[pass]) : "NULL");
 		rw::SetRenderStatePtr(rw::TEXTURERASTER, t ? t->raster : nil);
 		rw::im3d::Transform(sv.data(), (rw::int32)sv.size(), nil, rw::im3d::EVERYTHING);
 		rw::im3d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, si.data(), (rw::int32)si.size());
@@ -3464,6 +3471,39 @@ void DrawFxTest(float dt) {
 	rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
 	rw::SetRenderState(rw::ZWRITEENABLE, 1);
 	rw::SetRenderState(rw::VERTEXALPHA, 0);
+}
+void DrawFxAll(float dt) {
+	// Test aid SA_FX=<system> (+SA_FXZ/SA_FXSIZE/SA_FXALPHA): runs that system 6 m in front of the start camera, bursts every 0.5 s for systems without EMRATE.
+	static const char *testName = getenv("SA_FX");
+	static float org[3], burst = 0.0f; static bool testInit = false;
+	FxEmitterSim *testSim = nullptr;
+	if (testName) {
+		testSim = FxSimFor(testName, true);
+		if (!testInit) {
+			testInit = true;
+			rw::Matrix *c0 = &gCamera->getFrame()->matrix;
+			org[0] = camPos.x + c0->at.x * 6.0f; org[1] = camPos.y + c0->at.y * 6.0f; org[2] = camPos.z + (getenv("SA_FXZ") ? (float)atof(getenv("SA_FXZ")) : -0.5f);
+			fprintf(gLog, "SA_FX %s: %s, origin %.1f %.1f %.1f\n", testName, testSim ? "running" : "NOT FOUND", org[0], org[1], org[2]);
+		}
+		burst += dt;
+		if (testSim && !gFx.proj.find(testName)->prims[0].info("EMRATE") && burst > 0.5f) {
+			burst = 0.0f;
+			FxMult m; if (getenv("SA_FXSIZE")) m.size = (float)atof(getenv("SA_FXSIZE")); if (getenv("SA_FXALPHA")) m.a = (float)atof(getenv("SA_FXALPHA"));
+			testSim->addParticle(org, nullptr, m);
+		}
+	}
+	for (auto &kv : gFx.sims) {
+		FxEmitterSim *sm = kv.second;
+		if (!sm) continue;
+		float o0[3] = {0, 0, 0};
+		const float *o = sm == testSim ? org : o0;
+		sm->update(dt, o);
+		std::vector<FxBillboard> bb;
+		sm->collect(bb);
+		const FxSystem *fs = gFx.proj.find(kv.first);
+		if (!bb.empty() && fs) DrawFxSim(fs->prims[0], bb);
+	}
+	{ static float lt = 0; lt += dt; if (lt > 2.0f && !gFx.sims.empty()) { lt = 0; for (auto &kv : gFx.sims) if (kv.second && kv.second->alive()) fprintf(gLog, "fx %s: %zu alive\n", kv.first.c_str(), kv.second->alive()); } }
 }
 
 void DrawRain(float dt, unsigned tms) {
@@ -3708,7 +3748,7 @@ void Idle(float dt) {
 	DrawWater();
 	DrawRain(dt, (unsigned)(now * 1000.0));
 	DrawSandStorm(dt, (unsigned)(now * 1000.0));
-	DrawFxTest(dt);
+	DrawFxAll(dt);
 	gCamera->endUpdate();
 	// Test aid: SA_SHOT=<file.tga> SA_SHOTAT=<seconds> writes the back buffer once (the desktop capture of the window comes out white here).
 	static const char *shotPath = getenv("SA_SHOT");
