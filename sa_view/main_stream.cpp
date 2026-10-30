@@ -2,6 +2,7 @@
 // when instances come within the load radius and are dropped again beyond the unload radius.
 // usage: sa_stream.exe <SA game dir> [x y [loadRadius]]     default: Grove Street (2495 -1690), radius 300
 // Controls: W/A/S/D move, Q/E down/up, Shift = fast, left mouse drag = look, Esc = quit. Stats go to sa_stream.log.
+#include "FxSim.h"
 #include <rw.h>
 #include <skeleton.h>
 #define NOMINMAX
@@ -3451,8 +3452,12 @@ void DrawRain(float dt, unsigned tms) {
 	// them in a +-0.8 rad cone along the view direction, ground found by a vertical line, then 15+(int)(Rain*2) splashes within +-15 m of the spot at ground z + 0.1). The original spawns
 	// the "splash" particle effect (effects.fxp, not ported); DEVIATION: each splash is a tiny growing diamond outline (4 segments, 0.3 s) instead, capped at 1200 alive.
 	{
-		struct Splash { float x, y, z, age, life; };
-		static std::vector<Splash> sp;
+		static FxProject fxProj; static FxEmitterSim *splashSim = nullptr; static bool splashTried = false;
+		if (!splashTried) {
+			splashTried = true;
+			if (fxProj.load(gameDir + "/models/effects.fxp")) { const FxSystem *fs = fxProj.find("prt_splash"); if (fs && !fs->prims.empty()) splashSim = new FxEmitterSim(fs->prims[0], *fs); }
+			fprintf(gLog, "effects.fxp: %zu systems, prt_splash %s\n", fxProj.systems.size(), splashSim ? "simulated by FxEmitterSim" : "missing");
+		}
 		static float frameAcc = 0.0f;
 		frameAcc += dt * 50.0f;
 		int frames = std::min(3, (int)frameAcc);
@@ -3466,13 +3471,11 @@ void DrawRain(float dt, unsigned tms) {
 				float rads = (rand() & 1) ? rnd(0.0f, 6.2831853f) : rnd(-0.8f, 0.8f) + camYaw * 0.0174533f;
 				float sx = camPos.x + std::sin(rads) * radius, sy = camPos.y + std::cos(rads) * radius, gz;
 				if (!GroundHeight(sx, sy, 40.0f, 80.0f, gz)) continue;
-				for (int k = 0; k < per && sp.size() < 3000; k++) sp.push_back({sx + rnd(-15.0f, 15.0f), sy + rnd(-15.0f, 15.0f), gz + 0.1f, 0.0f, rnd(3.0f, 3.5f) * 0.03f});
+				for (int k = 0; k < per && splashSim && splashSim->alive() < 3000; k++) { float pp[3] = {sx + rnd(-15.0f, 15.0f), sy + rnd(-15.0f, 15.0f), gz + 0.1f}, vz[3] = {0, 0, 0}; FxMult m; m.a = 0.25f; m.size = 0.02f; m.life = 0.03f; splashSim->addParticle(pp, vz, m); }
 			}
 		}
-		for (size_t k = 0; k < sp.size();) {
-			sp[k].age += dt;
-			if (sp[k].age > sp[k].life) { sp[k] = sp.back(); sp.pop_back(); } else k++;
-		}
+		std::vector<FxBillboard> bb;
+		if (splashSim) { float o0[3] = {0, 0, 0}; splashSim->update(dt, o0); splashSim->collect(bb); }
 		// prt_splash (effects.fxp, read from the file): one emitter, textures splash_up1 -> splash_up2 (animated 1 -> 2 over the first half of the life), life 3.0..3.5 s * life multiplier 0.03
 		// (CWeather::AddRain passes FxPrtMult 1,1,1, alpha 0.25, size 0.02, life 0.03) = 0.09..0.105 s, size 2 -> 8 over the life * 0.02 = half-extent 4..16 cm, alpha 255 -> 0 * 0.25. DEVIATIONS (blend now mapped: 4/1 = SRCALPHA/ONE, i.e. additive): drawn as camera-facing
 		// quads, lit/fogged by nothing, no LOD fade (LODSTART 30 / LODEND 50), no culling.
@@ -3504,17 +3507,15 @@ void DrawRain(float dt, unsigned tms) {
 				rw::im3d::End();
 				sv.clear(); si.clear();
 			};
-			for (const Splash &q : sp) {
-				float t = q.age / q.life;
-				if ((t < 0.25f ? 0 : 1) != pass) continue;
-				float hw = (2.0f + 6.0f * t) * 0.02f;   // emitter Render (0x4A2C40): corners = right*size, up*size, i.e. size is a half-extent (no 0.5)
-				uint8_t al = (uint8_t)(255.0f * (1.0f - t) * 0.25f);
+			for (const FxBillboard &q : bb) {
+				if (q.tex != pass) continue;
+				float hw = q.halfX; uint8_t al = q.a;   // half-extent: emitter Render (0x4A2C40) multiplies right/up by the size
 				float ux[4] = {-1, 1, -1, 1}, uy[4] = {1, 1, -1, -1};
 				rw::uint16 base = (rw::uint16)sv.size();
 				for (int c = 0; c < 4; c++) {
 					rw::RWDEVICE::Im3DVertex iv;
-					iv.setX(q.x + (cm->right.x * ux[c] + cm->up.x * uy[c]) * hw); iv.setY(q.y + (cm->right.y * ux[c] + cm->up.y * uy[c]) * hw); iv.setZ(q.z + (cm->right.z * ux[c] + cm->up.z * uy[c]) * hw);
-					iv.setColor(255, 255, 255, al); iv.setU((ux[c] + 1) * 0.5f); iv.setV((1 - uy[c]) * 0.5f);
+					iv.setX(q.pos[0] + (cm->right.x * ux[c] + cm->up.x * uy[c]) * hw); iv.setY(q.pos[1] + (cm->right.y * ux[c] + cm->up.y * uy[c]) * hw); iv.setZ(q.pos[2] + (cm->right.z * ux[c] + cm->up.z * uy[c]) * hw);
+					iv.setColor(q.r, q.g, q.b, al); iv.setU((ux[c] + 1) * 0.5f); iv.setV((1 - uy[c]) * 0.5f);
 					sv.push_back(iv);
 				}
 				for (int k : {0, 1, 2, 1, 3, 2}) si.push_back((rw::uint16)(base + k));
@@ -3524,7 +3525,7 @@ void DrawRain(float dt, unsigned tms) {
 		}
 		rw::SetRenderState(rw::DESTBLEND, rw::BLENDINVSRCALPHA);
 		rw::SetRenderStatePtr(rw::TEXTURERASTER, nil);
-		{ static float lt = 0; lt += dt; if (lt > 2.0f) { lt = 0; fprintf(gLog, "rain: gRain %.2f strength %d splashes alive %zu\n", gRain, gRainStrength, sp.size()); } }
+		{ static float lt = 0; lt += dt; if (lt > 2.0f) { lt = 0; fprintf(gLog, "rain: gRain %.2f strength %d splashes alive %zu\n", gRain, gRainStrength, splashSim ? splashSim->alive() : (size_t)0); } }
 	}
 	rw::SetRenderState(rw::ZWRITEENABLE, 1);
 	rw::SetRenderState(rw::VERTEXALPHA, 0);
