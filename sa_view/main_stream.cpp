@@ -1410,7 +1410,7 @@ void StopRadioDevice() {
 // (RadioTable.inc: per station 31 slots of music track ids, intro ranges, outro ranges; ChooseMusicTrackIndex 0x4EA270 picks a slot at random not among the last min(count-2, 20) picks).
 // Queues: TRACK = [music, random outro clip of that slot]; INTRO = [random intro clip, music, outro clip]; OUTRO = [outro clip]. Probabilities as in ChooseTracksForStation:
 // 5% "DJ/ident/advert" branch, else 90% TRACK, else INTRO (50%) / OUTRO.
-// DEVIATIONS: ident / advert / DJ-banter clips are NOT queued (their tables 0x4E94C0/0x4E9570/0x4EA2D0 are not read yet), so the 5% branch plays an intro clip instead; the talk station
+// ident (0x4E94C0) and advert (0x4E9570) picks are ported; DEVIATIONS: DJ-banter clips (0x4EA2D0) are NOT queued (so adverts replace them), the OUTRO/INTRO tail of ChooseTracksForStation is simplified; the talk station
 // (WCTR, id 11) has no music table use here and falls back to random tracks of >= 2 MB; no news / weather / mission-triggered announcements; no per-station state saved.
 #include "RadioTable.inc"
 std::deque<size_t> gRadioQueue;
@@ -1439,7 +1439,40 @@ void RadioChooseTracks(int st) {
 		}
 		return 0;
 	};
+	// ident (ChooseIdentIndex 0x4E94C0): random id in the station's ident range, not among the last min(hi-lo-1, 8) idents; station 6's id 1100 needs stat 0x152 != 0 (stats are 0 here -> excluded)
+	static std::vector<int> identHist[13], advertHist[13];
+	auto queueIdent = [&]() {
+		int lo = kRadioIdent[st][0], hi = kRadioIdent[st][1];
+		if (lo == 1922) return false;
+		size_t keep = (size_t)std::min(hi - lo - 1, 8);
+		for (int tries = 0; tries < 64; tries++) {
+			int id = lo + rand() % (hi - lo + 1);
+			if (st == 6 && id == 1100) continue;
+			if (std::find(identHist[st].begin(), identHist[st].end(), id) != identHist[st].end()) continue;
+			identHist[st].push_back(id);
+			if (identHist[st].size() > keep) identHist[st].erase(identHist[st].begin());
+			gRadioQueue.push_back((size_t)id);
+			return true;
+		}
+		return false;
+	};
+	// advert (ChooseAdvertIndex 0x4E9570): random id in 66..134 not in the station's blacklist (23 ids) nor in its 40-entry history
+	auto queueAdvert = [&]() {
+		for (int tries = 0; tries < 256; tries++) {
+			int id = kRadioAdvertRange[0] + rand() % (kRadioAdvertRange[1] - kRadioAdvertRange[0] + 1);
+			if (std::find(std::begin(kRadioAdvertBlack[st]), std::end(kRadioAdvertBlack[st]), id) != std::end(kRadioAdvertBlack[st])) continue;
+			if (std::find(advertHist[st].begin(), advertHist[st].end(), id) != advertHist[st].end()) continue;
+			advertHist[st].push_back(id);
+			if (advertHist[st].size() > 40) advertHist[st].erase(advertHist[st].begin());
+			gRadioQueue.push_back((size_t)id);
+			return true;
+		}
+		return false;
+	};
+	auto queueDJ = [&]() { return false; };   // DEVIATION: DJ banter (0x4EA2D0: weather / time-of-day / script-state dependent lists) not ported
 	if (!RadioChance(0.95f)) {
+		if (RadioChance(0.5f)) queueIdent();
+		if (!queueDJ()) queueAdvert();
 		int m = pickMusic();
 		gRadioQueue.push_back(RadioClip(kRadioIntro[st][m]));
 	} else if (RadioChance(0.9f)) {
@@ -1447,6 +1480,7 @@ void RadioChooseTracks(int st) {
 		gRadioQueue.push_back((size_t)kRadioMusic[st][m]);
 		gRadioQueue.push_back(RadioClip(kRadioOutro[st][m]));
 	} else if (RadioChance(0.5f)) {
+		if (RadioChance(0.5f)) queueIdent();
 		int m = pickMusic();
 		gRadioQueue.push_back(RadioClip(kRadioIntro[st][m]));
 		gRadioQueue.push_back((size_t)kRadioMusic[st][m]);
@@ -1454,6 +1488,14 @@ void RadioChooseTracks(int st) {
 	} else {
 		int m = pickMusic();
 		gRadioQueue.push_back(RadioClip(kRadioOutro[st][m]));
+		if (RadioChance(0.5f)) {
+			if (RadioChance(0.5f)) queueIdent();
+			int m2 = pickMusic();
+			gRadioQueue.push_back(RadioClip(kRadioIntro[st][m2]));
+		} else {
+			if (RadioChance(0.5f)) queueIdent();
+			if (!queueDJ()) queueAdvert();
+		}
 	}
 }
 
