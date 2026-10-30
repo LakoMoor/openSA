@@ -3448,14 +3448,14 @@ void CarCollisionFx(const float contact[3], float imp) {
 			float t = 1.0f - (float)i / (float)amount;
 			float v[3] = {(dir[0] + r()) * force, (dir[1] + r()) * force, (dir[2] + r()) * force};
 			float ps[3] = {contact[0] - gPhys.moveSpeed.x * ts * t, contact[1] - gPhys.moveSpeed.y * ts * t, contact[2] - gPhys.moveSpeed.z * ts * t};
-			FxMult m; m.life = 0.8f;
+			FxMult m; m.life = 0.8f; if (getenv("SA_FXSIZE")) m.size = (float)atof(getenv("SA_FXSIZE"));   // test aid
 			sp->addParticle(ps, v, m);
 		}
 	}
 	if (FxEmitterSim *sm = FxSimFor("prt_smoke_huge", false)) {
 		int n = std::max(1, (int)(spd * ts * 4.0f));
 		float fp[3] = {gPhys.pos.x + (contact[0] - gPhys.pos.x) * 0.7f, gPhys.pos.y + (contact[1] - gPhys.pos.y) * 0.7f, gPhys.pos.z + (contact[2] - gPhys.pos.z) * 0.7f}, zv[3] = {0, 0, 0};
-		for (int i = 0; i < n && sm->alive() < 2000; i++) { FxMult m; m.r = m.g = m.b = 0.4f; m.a = 0.6f; m.size = 0.4f; sm->addParticle(fp, zv, m); }
+		for (int i = 0; i < n && sm->alive() < 2000; i++) { FxMult m; m.r = m.g = m.b = 0.4f; m.a = 0.6f; m.size = getenv("SA_FXSIZE") ? (float)atof(getenv("SA_FXSIZE")) * 0.4f : 0.4f; sm->addParticle(fp, zv, m); }
 	}
 }
 // Fx_c::AddBlood (exe 0x49EB00 read): skipped beyond 25 m of the camera (and when the violence/blood flag from 0x56d230 is off: assumed on), FxPrtMult(0.5, 0, 0, 1, size 0.8, rot 0, life 0.8),
