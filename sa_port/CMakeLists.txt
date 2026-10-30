@@ -54,3 +54,8 @@ add_executable(audio_probe src/audio_probe.cpp)
 target_link_libraries(audio_probe sa_audio)
 add_executable(paths_probe src/paths_probe.cpp)
 target_link_libraries(paths_probe sa_paths)
+
+add_library(sa_fx src/FxData.cpp)
+target_include_directories(sa_fx PUBLIC src)
+add_executable(fx_dump src/fx_dump.cpp)
+target_link_libraries(fx_dump sa_fx)
