@@ -1897,6 +1897,8 @@ void StartDriving(int gen) {
 	StartPhysics(g);
 }
 
+void CarVsTraffic();
+
 void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 	CarGen &g = gCarGens[gDriveGen];
 	auto *ownCol = gInsts[g.inst].col; gInsts[g.inst].col = nil; // the car's own collision proxy must not count as ground / obstacle
@@ -1947,6 +1949,7 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 			}
 		}
 	}
+	CarVsTraffic();
 	gInsts[g.inst].col = ownCol;
 	gCarSpeed = gPhys.forwardSpeed() * 50.0f;
 	{ static float lt = 0; lt += dt; if (lt > 2.0f) { lt = 0; fprintf(gLog, "physics: speed %.1f km/h gear %d wheels %d steer %.2f z %.2f\n", gCarSpeed * 3.6f, (int)gPhys.gear, gPhys.wheelsOnGround, gPhys.steerAngle, gPhys.pos.z); } }
@@ -2462,6 +2465,33 @@ struct TrafficCar {
 	int model = -1;
 };
 std::vector<TrafficCar> gTraffic;
+// Driven car vs traffic car (step 11): two spheres per car along the body axis (centres 1.4 m apart, radius 1.0 m); on overlap the player car is pushed out and CarPhysics::hitCar
+// is applied against a temporary body. DEVIATIONS: the traffic car's physics body is a copy of the player's (same mass/handling, not its own model's), traffic stays kinematic (keeps
+// its path speed of 10 m/s, takes no impulse), no damage on the traffic car is shown, the contact normal is 2D (ignores height).
+void CarVsTraffic() {
+	for (const TrafficCar &o : gTraffic) {
+		float dx = o.pos.x - gPhys.pos.x, dy = o.pos.y - gPhys.pos.y;
+		if (dx * dx + dy * dy > 36.0f || std::fabs(o.pos.z - gPhys.pos.z) > 2.5f) continue;
+		float ofx = -std::sin(o.heading), ofy = std::cos(o.heading);
+		for (int a = -1; a <= 1; a += 2) for (int b = -1; b <= 1; b += 2) {
+			float ax = gPhys.pos.x + gPhys.fwd.x * 0.7f * a, ay = gPhys.pos.y + gPhys.fwd.y * 0.7f * a;
+			float bx = o.pos.x + ofx * 0.7f * b, by = o.pos.y + ofy * 0.7f * b;
+			float nx = ax - bx, ny = ay - by, d = std::sqrt(nx * nx + ny * ny);
+			if (d >= 2.0f || d < 0.001f) continue;
+			nx /= d; ny /= d;
+			vp::CarPhysics other = gPhys;
+			other.place({o.pos.x, o.pos.y, o.pos.z}, o.heading);
+			other.moveSpeed = other.fwd * (10.0f / 50.0f);
+			other.turnSpeed = {0, 0, 0};
+			other.isPlayer = false;
+			float before = gPhys.health;
+			float imp = gPhys.hitCar(other, {gPhys.fwd.x * 0.7f * a - nx, gPhys.fwd.y * 0.7f * a - ny, 0}, {other.fwd.x * 0.7f * b + nx, other.fwd.y * 0.7f * b + ny, 0}, {nx, ny, 0});
+			gPhys.pos.x += nx * (2.0f - d); gPhys.pos.y += ny * (2.0f - d);
+			if (imp > 0.0f) fprintf(gLog, "car-car hit: impulse %.1f loss %.1f health %.1f\n", imp, before - gPhys.health, gPhys.health);
+		}
+	}
+}
+
 int TrafficModelCount(int model) { int n = 0; for (const TrafficCar &c : gTraffic) if (c.model == model) n++; return n; }
 std::unordered_map<int64_t, std::vector<PedNodeRef>> gCarNodeGrid;
 bool gCarNodesBuilt = false;
