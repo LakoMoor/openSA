@@ -3233,25 +3233,44 @@ void DrawRain(float dt, unsigned tms) {
 	rw::im3d::Transform(verts.data(), (rw::int32)verts.size(), nil, rw::im3d::EVERYTHING);
 	rw::im3d::RenderIndexedPrimitive(rw::PRIMTYPELINELIST, idx.data(), (rw::int32)idx.size());
 	rw::im3d::End();
-	// Rain splashes: INVENTED stand-in (the original uses the particle system, which is not ported): short-lived growing rings on the ground within 15 m of the camera.
+	// Rain splashes: spot selection and counts follow CWeather::AddRain (0x72A9A0, from gta-reversed; per 50 Hz frame: (int)(Rain*5) spots at a random radius 0..20 m around the camera, half of
+	// them in a +-0.8 rad cone along the view direction, ground found by a vertical line, then 15+(int)(Rain*2) splashes within +-15 m of the spot at ground z + 0.1). The original spawns
+	// the "splash" particle effect (effects.fxp, not ported); DEVIATION: each splash is a tiny growing diamond outline (4 segments, 0.3 s) instead, capped at 1200 alive.
 	{
 		struct Splash { float x, y, z, age; };
 		static std::vector<Splash> sp;
-		int want = gRainStrength / 3;
-		for (int tries = 0; tries < 6 && (int)sp.size() < want; tries++) {
-			float x = camPos.x + rnd(-15.0f, 15.0f), y = camPos.y + rnd(-15.0f, 15.0f), z;
-			if (GroundHeight(x, y, camPos.z + 3.0f, 12.0f, z)) sp.push_back({x, y, z + 0.03f, 0.0f});
+		static float frameAcc = 0.0f;
+		frameAcc += dt * 50.0f;
+		int frames = std::min(3, (int)frameAcc);
+		frameAcc -= (float)frames;
+		for (int fr = 0; fr < frames; fr++) {
+			int spots = (int)(gRain * 5.0f), per = 15 + (int)(gRain * 2.0f);
+			float maxR = std::max(gRain * 10.0f, 40.0f) * 0.5f;
+			for (int i = 0; i < spots; i++) {
+				float radius = rnd(0.0f, maxR);
+				float rads = (rand() & 1) ? rnd(0.0f, 6.2831853f) : rnd(-0.8f, 0.8f) + camYaw * 0.0174533f;
+				float sx = camPos.x + std::sin(rads) * radius, sy = camPos.y + std::cos(rads) * radius, gz;
+				if (!GroundHeight(sx, sy, 40.0f, 80.0f, gz)) continue;
+				for (int k = 0; k < per && sp.size() < 1200; k++) sp.push_back({sx + rnd(-15.0f, 15.0f), sy + rnd(-15.0f, 15.0f), gz + 0.1f, 0.0f});
+			}
 		}
 		std::vector<rw::RWDEVICE::Im3DVertex> sv;
 		std::vector<rw::uint16> si;
+		auto flush = [&]() {
+			if (sv.empty()) return;
+			rw::im3d::Transform(sv.data(), (rw::int32)sv.size(), nil, rw::im3d::EVERYTHING);
+			rw::im3d::RenderIndexedPrimitive(rw::PRIMTYPELINELIST, si.data(), (rw::int32)si.size());
+			rw::im3d::End();
+			sv.clear(); si.clear();
+		};
 		for (size_t k = 0; k < sp.size();) {
 			Splash &q = sp[k];
 			q.age += dt;
-			if (q.age > 0.35f) { sp[k] = sp.back(); sp.pop_back(); continue; }
+			if (q.age > 0.3f) { sp[k] = sp.back(); sp.pop_back(); continue; }
 			float r = 0.04f + q.age * 0.5f;
-			uint8_t al = (uint8_t)(120.0f * (1.0f - q.age / 0.35f));
-			for (int e = 0; e < 8; e++) {
-				float a0 = e * 0.785398f, a1 = (e + 1) * 0.785398f;
+			uint8_t al = (uint8_t)(120.0f * (1.0f - q.age / 0.3f));
+			for (int e = 0; e < 4; e++) {
+				float a0 = e * 1.570796f, a1 = (e + 1) * 1.570796f;
 				for (float ang : {a0, a1}) {
 					rw::RWDEVICE::Im3DVertex iv;
 					iv.setX(q.x + std::cos(ang) * r); iv.setY(q.y + std::sin(ang) * r); iv.setZ(q.z);
@@ -3259,13 +3278,11 @@ void DrawRain(float dt, unsigned tms) {
 					si.push_back((rw::uint16)sv.size()); sv.push_back(iv);
 				}
 			}
+			if (sv.size() >= 9000) flush();
 			k++;
 		}
-		if (!sv.empty()) {
-			rw::im3d::Transform(sv.data(), (rw::int32)sv.size(), nil, rw::im3d::EVERYTHING);
-			rw::im3d::RenderIndexedPrimitive(rw::PRIMTYPELINELIST, si.data(), (rw::int32)si.size());
-			rw::im3d::End();
-		}
+		{ static float lt = 0; lt += dt; if (lt > 2.0f) { lt = 0; fprintf(gLog, "rain: gRain %.2f strength %d splashes alive %zu\n", gRain, gRainStrength, sp.size()); } }
+		flush();
 	}
 	rw::SetRenderState(rw::ZWRITEENABLE, 1);
 	rw::SetRenderState(rw::VERTEXALPHA, 0);
