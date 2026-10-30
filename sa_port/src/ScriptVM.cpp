@@ -209,6 +209,21 @@ bool ScriptVM::execute(ScmThread &t, uint16_t op, bool neg, std::vector<ScmArg> 
 	case 0x04AE: ref(t, args[0]) = getI(t, args[1]); return true;    // SET_VAR_INT_TO_CONSTANT
 	case 0x03B0: case 0x0491: case 0x00FE: case 0x00EC: case 0x00A3:
 		condResult(t, false, neg); return true;                      // IS_GARAGE_OPEN / HAS_CHAR_GOT_WEAPON / LOCATE_CHAR_ANY_MEANS_3D/2D / IS_CHAR_IN_AREA_2D
+	// IS/SET/CLEAR_{GLOBAL,LOCAL}_VAR_BIT_{CONST,VAR,LVAR} (08B4..08C5): (variable, bit index); the const/var/lvar forms differ only in how the bit index is encoded, which getI resolves.
+	case 0x08B4: case 0x08B5: case 0x08B6: case 0x08B7: case 0x08B8: case 0x08B9:
+		condResult(t, ((uint32_t)ref(t, args[0]) >> (getI(t, args[1]) & 31)) & 1u, neg); return true;
+	case 0x08BA: case 0x08BB: case 0x08BC: case 0x08BD: case 0x08BE: case 0x08BF:
+		ref(t, args[0]) = (int32_t)((uint32_t)ref(t, args[0]) | (1u << (getI(t, args[1]) & 31))); return true;
+	case 0x08C0: case 0x08C1: case 0x08C2: case 0x08C3: case 0x08C4: case 0x08C5:
+		ref(t, args[0]) = (int32_t)((uint32_t)ref(t, args[0]) & ~(1u << (getI(t, args[1]) & 31))); return true;
+	// Pickups / set pieces / streamed scripts: bookkeeping only. DEVIATIONS: pickups are not created in the world (CREATE_PICKUP only hands out a unique handle), nothing is ever collected,
+	// set pieces are ignored, no streamed script is ever running, missions may always be started, scripted objects are never reported as existing.
+	case 0x0213: { static int32_t nextPickup = 1; ref(t, args[5]) = nextPickup++; return true; }       // CREATE_PICKUP (model, type, x, y, z, out)
+	case 0x032B: { static int32_t nextPickupA = 5000; ref(t, args[6]) = nextPickupA++; return true; } // CREATE_PICKUP_WITH_AMMO (model, type, ammo, x, y, z, out)
+	case 0x0214: case 0x03CA: condResult(t, false, neg); return true;                                  // HAS_PICKUP_BEEN_COLLECTED / DOES_OBJECT_EXIST
+	case 0x03EE: condResult(t, true, neg); return true;                                               // CAN_PLAYER_START_MISSION
+	case 0x0926: ref(t, args[1]) = 0; return true;                                                     // GET_NUMBER_OF_INSTANCES_OF_STREAMED_SCRIPT
+	case 0x04F8: case 0x014C: case 0x0914: return true;                                                // ADD_SET_PIECE / SWITCH_CAR_GENERATOR / REGISTER_STREAMED_SCRIPT_INTERNAL
 	case 0x09E8: ref(t, args[1]) = 0; return true;   // GET_CHAR_AREA_VISIBLE: always outside any interior (area 0); DEVIATION: interiors are not tracked
 	case 0x0002: t.ip = label(t, getI(t, args[0])); return true;
 	case 0x004D: if (!t.condFlag) t.ip = label(t, getI(t, args[0])); return true;
