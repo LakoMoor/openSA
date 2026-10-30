@@ -424,6 +424,11 @@ void CollectPlacements() {
 				gInsts[g].lodParent = (*parent)[i.lodIndex];
 		}
 	}
+	// test aid: SA_CARAT="x y z heading_rad model" adds one fixed car generator (e.g. on a flat street in front of a wall) for drive/damage tests
+	if (const char *ca = getenv("SA_CARAT")) {
+		float x, y, z, h; int m;
+		if (sscanf(ca, "%f %f %f %f %d", &x, &y, &z, &h, &m) == 5) gCarGens.push_back({{x, y, z}, h, m, 0, 0});
+	}
 	// every car generator gets a collision proxy Inst (id -1, col set while the car is spawned) so GroundHeight / RayCastWorld / PushOutSphere see cars
 	for (CarGen &g : gCarGens) {
 		Inst i;
