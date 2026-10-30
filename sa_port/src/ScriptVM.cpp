@@ -241,6 +241,12 @@ bool ScriptVM::execute(ScmThread &t, uint16_t op, bool neg, std::vector<ScmArg> 
 	case 0x0767: // SET_ZONE_POPULATION_TYPE
 		zonePopType[args[0].str] = getI(t, args[1]);
 		return true;
+	// Player-state conditions: the viewer's player state is not visible to the VM, so on-foot answers are returned (not in a car / boat / train / flying vehicle / model, no car
+	// cheats; controls on). DEVIATION: driving in the viewer is not visible to scripts.
+	case 0x00DF: case 0x00DD: case 0x04A7: case 0x04C8: case 0x09AE: case 0x0445:
+		condResult(t, false, neg); return true;
+	case 0x09E7:
+		condResult(t, true, neg); return true;
 	default:
 		break;
 	}
