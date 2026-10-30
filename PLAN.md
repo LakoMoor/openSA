@@ -1,6 +1,7 @@
 # Porting plan
 
-reVC (E:\openSAeVC) is the structural reference for most remaining steps; SA-specific values come from the exe / gta-reversed.
+reVC (E:\openSA
+eVC) is the structural reference for most remaining steps; SA-specific values come from the exe / gta-reversed.
 
 Written down from the README status table and the project notes; it is the plan the work has followed. Status is as of the last commit. "Done" means implemented and checked as far as the README states for that row, with the listed deviations; nothing here is a complete 1:1 port.
 
@@ -12,7 +13,7 @@ Written down from the README status table and the project notes; it is the plan 
 | 4a | Audio: SFX bank parser | done (710 banks parse) |
 | 4b | Audio: footsteps (surface banks, swimming, ambient peds) | done, run-tested only, not heard |
 | 5 | Audio: vehicle engine / horn / doors | partial (horn + cruise-loop engine of the driven car, run-tested, not heard) |
-| 6 | Audio: weapons, speech, ambience, radio streams | partial (key X on foot plays the Desert Eagle shot from bank 143 sound 6; builds and runs, bank 143 verified to exist with 89 sounds and sound 6 = 3942 samples @26600 Hz (0.15 s, plausible shot) via audio_probe; never triggered or heard in a game run; no weapon system, layering, speech, ambience, radio) |
+| 6 | Audio: weapons, speech, ambience, radio streams | partial (key X on foot plays the Desert Eagle shot from bank 143 sound 6; builds and runs, bank 143 verified to exist with 89 sounds and sound 6 = 3942 samples @26600 Hz (0.15 s, plausible shot) via audio_probe; never triggered or heard in a game run; no weapon system, layering, speech, ambience; radio: audio/streams/* verified headless to be XOR-encrypted with the 16-byte table EA3AC4A19AA814F348B0D7239DE8FFF1 indexed by (file offset & 15) (key from gta-reversed CAEStreamTransformer, 0x4f1750; not yet re-checked in the exe), decrypting to a 8000-byte filler/header block then Ogg Vorbis ('OggS' at 8068; BEATS has a different table header); decoder/playback not written) |
 | 7 | Water: waves, foam, flow shading, seam, brightness | partial (water.dat polygons drawn in two textured layers with the exe's alpha/UV-scroll/wind logic and timecyc colour; wave height grid near the camera done; no foam, colour multiplier / glare, original block-scan renderer or seam handling) |
 | 8 | Particles (sandstorm, splashes, rain haze) | partial (rain streaks; ground splash rings as an INVENTED stand-in, not seen in a screenshot; no particle system, sandstorm) |
 | 9 | CJ clothes (`ConstructTextures`, clothes builder) | partial (starting outfit from main.scm's GIVE_PLAYER_CLOTHES_OUTSIDE_SHOP: vest, denim jeans, black sneakers as separate skinned parts; checked on screen; no texture composition/blending, no fat/muscle blend, no outfit changes, outfit hard-coded from the recorded script calls) |
