@@ -67,7 +67,7 @@ bool ScriptVM::load(const std::string &path)
 
 bool ScriptVM::readOne(ScmThread &t, ScmArg &a)
 {
-	if (t.ip >= m_mem.size())
+	if (t.ip + 24 > m_mem.size())   // up to 17 bytes of operand are read below
 		return false;
 	const uint8_t *p = &m_mem[t.ip];
 	a = ScmArg();
@@ -85,7 +85,8 @@ bool ScriptVM::readOne(ScmThread &t, ScmArg &a)
 	case 7: case 8: case 0xC: case 0xD: case 0x12: case 0x13: {
 		uint16_t base = rd16(p), idxVar = rd16(p + 2);
 		uint8_t flags = p[5];
-		int32_t idx = (flags & 0x80) ? t.locals[idxVar] : rd32(&m_mem[idxVar]);
+		// a corrupt operand stream (misparsed earlier command) must not read outside the locals / memory: treat as index 0
+		int32_t idx = (flags & 0x80) ? (idxVar < 34 ? t.locals[idxVar] : 0) : (idxVar + 4u <= m_mem.size() ? rd32(&m_mem[idxVar]) : 0);
 		int elem = (a.type == 7 || a.type == 8) ? 4 : (a.type == 0xC || a.type == 0xD) ? 8 : 16;
 		bool local = (a.type == 8 || a.type == 0xD || a.type == 0x13);
 		a.isVar = true;
@@ -309,8 +310,11 @@ void ScriptVM::runThread(ScmThread &t)
 		int fixed = ci->fixed;
 		if (op == 0x05B6) { t.ip += 128; continue; }
 		if (op == 0x004C) fixed = 1;
+		static uint16_t lastOps[16]; static uint32_t lastIps[16]; static int lastN = 0;
+		lastOps[lastN % 16] = op; lastIps[lastN % 16] = t.ip - 2; lastN++;
 		if (!readArgs(t, fixed, ci->vararg != 0, args)) {
 			std::fprintf(stderr, "script: bad argument stream for %04X (%s) at %u\n", op, ci->name, t.ip);
+			for (int k = 15; k >= 1; k--) if (lastN - 1 - k >= 0) std::fprintf(stderr, "   prev %04X at %u (%s)\n", lastOps[(lastN - 1 - k) % 16], lastIps[(lastN - 1 - k) % 16], t.name.c_str());
 			t.active = false;
 			return;
 		}
