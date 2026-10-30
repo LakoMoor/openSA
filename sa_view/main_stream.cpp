@@ -2068,7 +2068,7 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 				vp::V3 n = {ct.n.x, ct.n.y, 0.0f};
 				n = vp::norm(n);
 				gPhys.pos.x += n.x * ct.depth; gPhys.pos.y += n.y * ct.depth;
-				vp::V3 pt = {c.x - n.x * 0.9f - gPhys.pos.x, c.y - n.y * 0.9f - gPhys.pos.y, c.z - gPhys.pos.z};
+				vp::V3 pt = {c.x - n.x * 0.9f - gPhys.pos.x, c.y - n.y * 0.9f - gPhys.pos.y, getenv("SA_WALLSPHEREZ") ? c.z - gPhys.pos.z : 0.0f};   // DEVIATION: the wall impulse is applied at centre-of-mass height (the 5-sphere push-out contacts at sphere height made the car pitch and bounce airborne at 42 km/h); SA_WALLSPHEREZ=1 restores the sphere height
 				float before = gPhys.health, imp = gPhys.hitStatic(pt, n);
 				if (imp > 0.0f && gPhys.health < before) fprintf(gLog, "car damage: impulse %.1f loss %.1f health %.1f\n", imp, before - gPhys.health, gPhys.health);
 				{ float wp[3] = {gPhys.pos.x + pt.x, gPhys.pos.y + pt.y, gPhys.pos.z + pt.z}; CarCollisionFx(wp, imp); }
