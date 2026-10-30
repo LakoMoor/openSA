@@ -22,3 +22,16 @@ Written down from the README status table and the project notes; it is the plan 
 | 12 | Car streaming for generator models (`m_AppropriateLoadedCars`) | partial (StreamOneNewCar / appropriate-zone logic ported from gta-reversed; pool of up to 22 model ids with the original 64/350-frame cadence, no real loading, no taxi/boats/cops/gang cars; run-tested via log) |
 
 Steps 5-12 are each a subsystem of weeks of work in the original; they are not expected to finish in a single session.
+
+## Proposed acceptance criteria (written by the assistant, NOT agreed by the user)
+
+A step is only marked `done` when every box is ticked with in-game evidence (log line or screenshot). Status as of 2026-10-30:
+
+- Step 5 (vehicle audio): [x] engine loop plays while driving (log) / [x] horn on H (log) / [ ] doors / [ ] heard by a human / [ ] per-model tables re-read in the exe.
+- Step 6 (audio): [x] weapon shot on X (log only) / [x] radio decode + station queue from the exe tables (log only) / [ ] DJ banter / [ ] speech / [ ] ambience / [ ] heard by a human.
+- Step 7 (water): [x] wave grid / [ ] foam / [ ] flow shading / [ ] visual comparison with the original.
+- Step 8 (particles): [x] rain splash placement + prt_splash parameters / [x] sandstorm spawn rule + prt_sand2 parameters / [ ] splash, sandstorm and wake visible on a screenshot / [ ] blend-id mapping / [ ] generic fx system loader (emitters, forces, LOD).
+- Step 9 (CJ clothes): [x] starting outfit on screenshot / [ ] clothes builder texture merge / [ ] shop outfits.
+- Step 10 (scripts): [x] every opcode of main.scm is handled or logged (3 viewer-handled) / [ ] missions actually run / [ ] world-creating commands (pickups, objects, set pieces).
+- Step 11 (vehicle physics): [x] wall / traffic / pedestrian impacts with damage (test aids) / [x] surface adhesion / [ ] objects / [ ] visual body damage / [ ] no fall through terrain on hills / [ ] feel compared with the real game.
+- Step 12 (car streaming): [x] pool + appropriate-car selection / [ ] real model loading budget / [ ] verification against the original's m_AppropriateLoadedCars.
