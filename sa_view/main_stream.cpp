@@ -491,6 +491,9 @@ inline float LodDistMult() { return kLodDistScale * 70.0f / gFovDeg; }
 
 // CFileLoader (0x5B51E0, decompiled): SetupBigBuilding is called for an instance with LOD children or lodMult * drawDist > 300.
 bool IsBigBuilding(const Inst &in) { return in.numLodChildren > 0 || LodDistMult() * in.drawDist > 300.0f; }
+// DEVIATION: the decompiled SetupBigBuilding switches UsesCollision off, but skipping those instances leaves holes in the Mount Chiliad terrain (the car fell through the world at (-1946 -1732), 0 guard hits with this
+// changed); the exe's later collision handling for them (LOD with one child takes the child's COL, CColAccel...) is not ported, so big instances that own a COL still collide. SA_BIGNOCOL=1 restores the strict rule.
+bool SkipsCollision(const Inst &in) { static const bool strict = getenv("SA_BIGNOCOL") != nullptr; return strict && IsBigBuilding(in); }
 
 float DrawLimit(const Inst &in, float &fading) {
 	float farClip = gFarClip;
@@ -560,7 +563,7 @@ bool GroundHeight(float x, float y, float zFrom, float maxDrop, float &outZ) {
 			if (g == gGrid.end()) continue;
 			for (int idx : g->second) {
 				const Inst &in = gInsts[idx];
-				if (!in.col || IsBigBuilding(in)) continue;
+				if (!in.col || SkipsCollision(in)) continue;
 				float reach = in.col->bound.radius + std::sqrt(in.col->bound.center[0] * in.col->bound.center[0] + in.col->bound.center[1] * in.col->bound.center[1] +
 				                                              in.col->bound.center[2] * in.col->bound.center[2]) + 1.0f;
 				if (std::fabs(in.pos.x - x) > reach || std::fabs(in.pos.y - y) > reach) continue;
@@ -594,7 +597,7 @@ float RayCastWorld(const rw::V3d &o, const rw::V3d &d, float maxT) {
 			if (g == gGrid.end()) continue;
 			for (int idx : g->second) {
 				const Inst &in = gInsts[idx];
-				if (!in.col || IsBigBuilding(in)) continue;
+				if (!in.col || SkipsCollision(in)) continue;
 				const float *bc = in.col->bound.center;
 				float reach = in.col->bound.radius + std::sqrt(bc[0] * bc[0] + bc[1] * bc[1] + bc[2] * bc[2]) + maxT + 1.0f;
 				float dx = in.pos.x - o.x, dy = in.pos.y - o.y, dz = in.pos.z - o.z;
@@ -656,7 +659,7 @@ bool PushOutSphere(rw::V3d &c, float r, std::vector<Contact> *out = nullptr) {
 			if (g == gGrid.end()) continue;
 			for (int idx : g->second) {
 				const Inst &in = gInsts[idx];
-				if (!in.col || IsBigBuilding(in)) continue;
+				if (!in.col || SkipsCollision(in)) continue;
 				float reach = in.col->bound.radius + std::sqrt(in.col->bound.center[0] * in.col->bound.center[0] + in.col->bound.center[1] * in.col->bound.center[1] +
 				                                              in.col->bound.center[2] * in.col->bound.center[2]) + r + 0.5f;
 				float dx = in.pos.x - c.x, dy = in.pos.y - c.y, dz = in.pos.z - c.z;
@@ -2062,7 +2065,10 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 		else if (haveGood && gPhys.pos.z < lastGood.pos.z - 40.0f) {
 			{ float gz = 0; bool ok = GroundHeight(gPhys.pos.x, gPhys.pos.y, gPhys.pos.z + 60.0f, 400.0f, gz);
 			  fprintf(gLog, "physics: guard at (%.1f %.1f %.1f) from good z %.1f, ground query from +60 m: %s %.1f\n", gPhys.pos.x, gPhys.pos.y, gPhys.pos.z, lastGood.pos.z, ok ? "hit" : "none", gz); }
-			{ float g3 = 0; bool ok3 = GroundHeight(lastGood.pos.x, lastGood.pos.y, lastGood.pos.z + 2.0f, 30.0f, g3); { float wz = 0; bool okw = WaterLevelAt(gPhys.pos.x, gPhys.pos.y, wz); fprintf(gLog, "physics: water.dat at the guard spot: %s %.1f\n", okw ? "poly" : "NONE", wz); }
+			{ float g3 = 0; bool ok3 = GroundHeight(lastGood.pos.x, lastGood.pos.y, lastGood.pos.z + 2.0f, 30.0f, g3); { static int gi = 0; if (gi++ < 1) { for (const Inst &in : gInsts) { float ddx = in.pos.x - gPhys.pos.x, ddy = in.pos.y - gPhys.pos.y; if (ddx * ddx + ddy * ddy < 80.0f * 80.0f) fprintf(gLog, "  inst near guard: model %d pos %.0f %.0f %.0f col %s big %d r %.0f\n", in.id, in.pos.x, in.pos.y, in.pos.z, in.col ? "yes" : "NO", (int)IsBigBuilding(in), in.col ? in.col->bound.radius : 0.0f); } } }
+			{ static int gl = 0; if (gl++ < 1) { std::string rows; for (int j = 5; j >= -5; j--) { char b[16]; rows += "\n   "; for (int i = -5; i <= 5; i++) { float gz2; bool o2 = GroundHeight(gPhys.pos.x + i * 2.0f, gPhys.pos.y + j * 2.0f, 900.0f, 1500.0f, gz2); snprintf(b, sizeof b, o2 ? "%5.0f" : "    .", gz2); rows += b; } } fprintf(gLog, "physics: ground grid (2 m step, centre = guard spot):%s\n", rows.c_str()); } }
+			{ float dz = 0; bool okd = GroundHeight(gPhys.pos.x, gPhys.pos.y, 900.0f, 1500.0f, dz); fprintf(gLog, "physics: deep ground query at the guard spot from z 900: %s %.1f\n", okd ? "hit" : "NONE", dz); }
+			{ float wz = 0; bool okw = WaterLevelAt(gPhys.pos.x, gPhys.pos.y, wz); fprintf(gLog, "physics: water.dat at the guard spot: %s %.1f\n", okw ? "poly" : "NONE", wz); }
 			fprintf(gLog, "physics: at the last good spot (%.1f %.1f %.1f) ground now: %s %.1f; streamer pending/active see status line\n", lastGood.pos.x, lastGood.pos.y, lastGood.pos.z, ok3 ? "hit" : "NONE", g3); }
 			gPhys = lastGood; gPhys.moveSpeed = {0, 0, 0}; gPhys.turnSpeed = {0, 0, 0};
 			fprintf(gLog, "physics: fell through unloaded ground, restored the last grounded state\n");
