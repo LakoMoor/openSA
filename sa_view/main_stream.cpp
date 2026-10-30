@@ -11,6 +11,7 @@ namespace rw { namespace d3d { extern IDirect3DDevice9 *d3ddevice; } }
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <deque>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -1405,25 +1406,67 @@ void StopRadioDevice() {
 	for (int i = 0; i < 4; i++) r.primed[i] = false;
 }
 
-// Track choice: CAERadioTrackManager::ChooseTracksForStation (0x4EB180, gta-reversed) plays a single music track in ~85% of its picks (0.95 * 0.9) and otherwise queues ident / DJ banter /
-// advert / intro / outro clips. The per-station id lists that classify those clips live in the exe and are NOT read yet, so DEVIATION: only music is played, approximated as the pack's
-// tracks of at least 2 MB (~110 s at the ~150 kbps these streams use), picked at random without repeating any of the last 6 (the original also keeps a music history, AddMusicTrackIndexToHistory).
+// Track choice follows CAERadioTrackManager::ChooseTracksForStation (0x4EB180, gta-reversed) + QueueUpTracksForStation (0x4EA675, read in the exe) with the id tables dumped from the exe
+// (RadioTable.inc: per station 31 slots of music track ids, intro ranges, outro ranges; ChooseMusicTrackIndex 0x4EA270 picks a slot at random not among the last min(count-2, 20) picks).
+// Queues: TRACK = [music, random outro clip of that slot]; INTRO = [random intro clip, music, outro clip]; OUTRO = [outro clip]. Probabilities as in ChooseTracksForStation:
+// 5% "DJ/ident/advert" branch, else 90% TRACK, else INTRO (50%) / OUTRO.
+// DEVIATIONS: ident / advert / DJ-banter clips are NOT queued (their tables 0x4E94C0/0x4E9570/0x4EA2D0 are not read yet), so the 5% branch plays an intro clip instead; the talk station
+// (WCTR, id 11) has no music table use here and falls back to random tracks of >= 2 MB; no news / weather / mission-triggered announcements; no per-station state saved.
+#include "RadioTable.inc"
+std::deque<size_t> gRadioQueue;
+std::vector<int> gRadioHistory[13];
+static bool RadioChance(float p) { return rand() < (int)(p * (float)RAND_MAX); }
+static size_t RadioClip(const int range[2]) { int lo = range[0], hi = range[1]; return (size_t)(lo + (hi > lo ? rand() % (hi - lo + 1) : 0)); }
+
+void RadioChooseTracks(int st) {
+	RadioPlayer &r = gRadio;
+	if (st == 11 || st < 1 || st > 10 || kRadioCount[st] < 2) {   // talk station / unknown: any long track of the pack
+		std::vector<size_t> cand;
+		for (size_t id = 0; id < r.table.tracks.size(); id++) if (r.table.tracks[id].pack == r.packs[r.cur] && r.table.tracks[id].size >= 2000000u) cand.push_back(id);
+		if (!cand.empty()) gRadioQueue.push_back(cand[(size_t)rand() % cand.size()]);
+		return;
+	}
+	auto pickMusic = [&]() {
+		std::vector<int> &h = gRadioHistory[st];
+		size_t keep = (size_t)std::min(kRadioCount[st] - 2, 20);
+		for (int tries = 0; tries < 64; tries++) {
+			int m = rand() % kRadioCount[st];
+			if (kRadioMusic[st][m] >= (int)r.table.tracks.size()) continue;
+			if (std::find(h.begin(), h.end(), m) != h.end()) continue;
+			h.push_back(m);
+			if (h.size() > keep) h.erase(h.begin());
+			return m;
+		}
+		return 0;
+	};
+	if (!RadioChance(0.95f)) {
+		int m = pickMusic();
+		gRadioQueue.push_back(RadioClip(kRadioIntro[st][m]));
+	} else if (RadioChance(0.9f)) {
+		int m = pickMusic();
+		gRadioQueue.push_back((size_t)kRadioMusic[st][m]);
+		gRadioQueue.push_back(RadioClip(kRadioOutro[st][m]));
+	} else if (RadioChance(0.5f)) {
+		int m = pickMusic();
+		gRadioQueue.push_back(RadioClip(kRadioIntro[st][m]));
+		gRadioQueue.push_back((size_t)kRadioMusic[st][m]);
+		gRadioQueue.push_back(RadioClip(kRadioOutro[st][m]));
+	} else {
+		int m = pickMusic();
+		gRadioQueue.push_back(RadioClip(kRadioOutro[st][m]));
+	}
+}
+
 bool RadioNextTrack() {
 	RadioPlayer &r = gRadio;
 	r.stream.end();
 	r.streaming = false;
-	const int pack = r.packs[r.cur];
-	static std::vector<size_t> history;
-	std::vector<size_t> cand;
-	for (size_t id = 0; id < r.table.tracks.size(); id++)
-		if (r.table.tracks[id].pack == pack && r.table.tracks[id].size >= 2000000u && std::find(history.begin(), history.end(), id) == history.end()) cand.push_back(id);
-	for (int attempt = 0; attempt < 8 && !cand.empty(); attempt++) {
-		size_t pick = (size_t)(rand() % (int)cand.size());
-		size_t id = cand[pick];
-		cand.erase(cand.begin() + pick);
+	for (int attempt = 0; attempt < 12; attempt++) {
+		if (gRadioQueue.empty()) RadioChooseTracks(r.cur + 1);
+		if (gRadioQueue.empty()) return false;
+		size_t id = gRadioQueue.front();
+		gRadioQueue.pop_front();
 		if (r.stream.openTrack(r.table, id) && r.stream.channels == 2 && r.stream.begin()) {
-			history.push_back(id);
-			if (history.size() > 6) history.erase(history.begin());
 			r.streaming = true;
 			if (r.devRate != r.stream.rate) {
 				StopRadioDevice();
@@ -1431,7 +1474,8 @@ bool RadioNextTrack() {
 				if (waveOutOpen(&r.h, WAVE_MAPPER, &fmt, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) { r.h = nullptr; r.streaming = false; return false; }
 				r.devRate = r.stream.rate;
 			}
-			fprintf(gLog, "radio: pack %s track %zu (%u bytes)\n", r.table.packs[pack].c_str(), id, r.table.tracks[id].size);
+			fprintf(gLog, "radio: station %d pack %s track %zu (%u bytes)", r.cur + 1, r.table.packs[r.packs[r.cur]].c_str(), id, r.table.tracks[id].size);
+			fprintf(gLog, "%c", 10);
 			return true;
 		}
 	}
@@ -1457,7 +1501,7 @@ void UpdateRadio() {
 			r.cur++;
 			if (r.cur >= (int)r.packs.size()) r.cur = -1;
 			if (r.cur < 0) { r.stream.end(); r.streaming = false; StopRadioDevice(); fprintf(gLog, "radio: off\n"); }
-			else { r.track = 0; RadioNextTrack(); }
+			else { r.track = 0; gRadioQueue.clear(); RadioNextTrack(); }
 		}
 	}
 	r.prevKey = key;
