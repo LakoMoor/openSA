@@ -1433,7 +1433,8 @@ bool RadioNextTrack() {
 void UpdateRadio() {
 	RadioPlayer &r = gRadio;
 	if (getenv("SA_MUTE")) return;
-	bool key = sk::keys['R'];
+	static int autoFrames = 0;   // test aid SA_RADIO=1: behave as if R is pressed once after ~200 frames
+	bool key = sk::keys['R'] || (getenv("SA_RADIO") && ++autoFrames > 200 && autoFrames < 205);
 	if (key && !r.prevKey) {
 		if (!r.tried) {
 			r.tried = true;
