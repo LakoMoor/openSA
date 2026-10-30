@@ -3457,6 +3457,7 @@ void DrawRain(float dt, unsigned tms) {
 		frameAcc += dt * 50.0f;
 		int frames = std::min(3, (int)frameAcc);
 		frameAcc -= (float)frames;
+		if (getenv("SA_NOSPLASH")) frames = 0;   // test aid: compare screenshots with and without splashes
 		for (int fr = 0; fr < frames; fr++) {
 			int spots = (int)(gRain * 5.0f), per = 15 + (int)(gRain * 2.0f);
 			float maxR = std::max(gRain * 10.0f, 40.0f) * 0.5f;
