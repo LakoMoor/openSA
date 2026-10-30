@@ -1538,6 +1538,18 @@ void UpdateRadio() {
 				for (size_t i = 0; i < r.table.packs.size(); i++)
 					if (r.table.packs[i] == st[0]) { r.packs.push_back((int)i); break; }
 			fprintf(gLog, "radio: table %s, %zu tracks, %zu station packs\n", r.tableOk ? "ok" : "FAILED", r.table.tracks.size(), r.packs.size());
+			// test aid SA_RADIOSIM=1: log 12 generated queues per station-1 pick without playing (checks ident/advert/intro/music/outro ids)
+			if (getenv("SA_RADIOSIM") && !r.packs.empty()) {
+				r.cur = 0;
+				for (int q = 0; q < 12; q++) {
+					gRadioQueue.clear();
+					RadioChooseTracks(1);
+					std::string line = "radio sim queue:";
+					for (size_t id : gRadioQueue) line += " " + std::to_string(id) + "(" + r.table.packs[r.table.tracks[id].pack] + ")";
+					fprintf(gLog, "%s%c", line.c_str(), 10);
+				}
+				gRadioQueue.clear(); r.cur = -1;
+			}
 		}
 		if (r.tableOk && !r.packs.empty()) {
 			r.cur++;
