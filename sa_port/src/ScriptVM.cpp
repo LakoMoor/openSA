@@ -197,6 +197,8 @@ bool ScriptVM::execute(ScmThread &t, uint16_t op, bool neg, std::vector<ScmArg> 
 		}
 		return true;
 	}
+	case 0x090F: return true;   // MARK_STREAMED_SCRIPT_AS_NO_LONGER_NEEDED: streamed scripts are not unloaded here
+	case 0x09E8: ref(t, args[1]) = 0; return true;   // GET_CHAR_AREA_VISIBLE: always outside any interior (area 0); DEVIATION: interiors are not tracked
 	case 0x0002: t.ip = label(t, getI(t, args[0])); return true;
 	case 0x004D: if (!t.condFlag) t.ip = label(t, getI(t, args[0])); return true;
 	case 0x004E: t.active = false; return true;
