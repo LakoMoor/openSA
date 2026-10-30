@@ -2008,6 +2008,7 @@ void StartDriving(int gen) {
 void CarVsTraffic();
 void FxBurst(const char *name, const float pos[3], int count);
 void CarCollisionFx(const float contact[3], float impulse);
+void FxAddBlood(const float pos[3], const float dir[3], int amount);
 
 void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 	CarGen &g = gCarGens[gDriveGen];
@@ -2549,7 +2550,7 @@ void UpdateAmbientPeds(float dt) {
 					vp::V3 f = n * imp;
 					gPhys.applyMoveForce(f); gPhys.applyTurnForce(f, rel);
 					fprintf(gLog, "car-ped hit: impulse %.1f car speed %.1f km/h\n", imp, gPhys.forwardSpeed() * 50.0f * 3.6f);
-					{ float bp[3] = {p.pos.x, p.pos.y, p.pos.z}; FxBurst("prt_blood", bp, 20); }   // DEVIATION: trigger/count invented (the original uses Fx_c::AddBlood, not read)
+					{ vp::V3 dn = vp::norm({-n.x, -n.y, 0.0f}); float bp[3] = {gPhys.pos.x + dn.x * 0.35f, gPhys.pos.y + dn.y * 0.35f, gPhys.pos.z + 0.6f}, bd[3] = {dn.x / 100.0f, dn.y / 100.0f, 0.0f}; FxAddBlood(bp, bd, 16); }   // CVehicle::ProcessEntityCollision run-over branch (Vehicle.cpp:3888)
 					gone = true;
 				}
 			}
@@ -3453,6 +3454,22 @@ void CarCollisionFx(const float contact[3], float imp) {
 		int n = std::max(1, (int)(spd * ts * 4.0f));
 		float fp[3] = {gPhys.pos.x + (contact[0] - gPhys.pos.x) * 0.7f, gPhys.pos.y + (contact[1] - gPhys.pos.y) * 0.7f, gPhys.pos.z + (contact[2] - gPhys.pos.z) * 0.7f}, zv[3] = {0, 0, 0};
 		for (int i = 0; i < n && sm->alive() < 2000; i++) { FxMult m; m.r = m.g = m.b = 0.4f; m.a = 0.6f; m.size = 0.4f; sm->addParticle(fp, zv, m); }
+	}
+}
+// Fx_c::AddBlood (exe 0x49EB00 read): skipped beyond 25 m of the camera (and when the violence/blood flag from 0x56d230 is off: assumed on), FxPrtMult(0.5, 0, 0, 1, size 0.8, rot 0, life 0.8),
+// per particle velocity = dir * 1.5 + rnd(-1, 1) per axis, added to prt_blood. The run-over call (CVehicle::ProcessEntityCollision, gta-reversed Vehicle.cpp:3888) passes the car position +
+// dirToPed.xy * 0.35 at z + 0.6, dirToPed / 100, 16 particles. DEVIATIONS: the blood pool decal (CShadows call 0x706f60 every 8th call) and wall blood are not done, the 3rd velocity axis'
+// exact formula is read loosely, the 'on screen' test of the caller is skipped.
+void FxAddBlood(const float pos[3], const float dir[3], int amount) {
+	float dx = pos[0] - camPos.x, dy = pos[1] - camPos.y, dz = pos[2] - camPos.z;
+	if (dx * dx + dy * dy + dz * dz >= 625.0f) return;
+	FxEmitterSim *sm = FxSimFor("prt_blood", false);
+	if (!sm) return;
+	auto r = []() { return -1.0f + 2.0f * ((float)rand() / (float)RAND_MAX); };
+	for (int i = 0; i < amount && sm->alive() < 2000; i++) {
+		float v[3] = {dir[0] * 1.5f + r(), dir[1] * 1.5f + r(), dir[2] * 1.5f + r()};
+		FxMult m; m.r = 0.5f; m.g = 0.0f; m.b = 0.0f; m.a = 1.0f; m.size = 0.8f; m.rot = 0.0f; m.life = 0.8f;
+		sm->addParticle(pos, v, m);
 	}
 }
 void DrawFxSim(const FxPrim &prim, const std::vector<FxBillboard> &bb) {
