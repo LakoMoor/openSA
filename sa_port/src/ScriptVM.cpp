@@ -230,6 +230,20 @@ bool ScriptVM::execute(ScmThread &t, uint16_t op, bool neg, std::vector<ScmArg> 
 	case 0x095A: case 0x0959: case 0x0958: { static int32_t nextSpecial = 9000; ref(t, args[3]) = nextSpecial++; return true; }
 	case 0x0107: case 0x029B: { static int32_t nextObject = 20000; ref(t, args[4]) = nextObject++; return true; }
 	case 0x0517: { static int32_t nextProp = 7000; ref(t, args[4]) = nextProp++; return true; }
+	// Side-effect-only commands with no visible counterpart in this port (garage / restart / object physics + proofs / LOD / fade / on-screen text / weather+time forcing / stats /
+	// camera / IPL + collision requests / mission bookkeeping). DEVIATION: accepted and ignored, so none of those effects exist; text-label stores do not write the label.
+	case 0x07F7: case 0x02B9: case 0x09CA: case 0x07FB: case 0x0392: case 0x04CE: case 0x016C: case 0x0827: case 0x02FA: case 0x016D: case 0x0550: case 0x08E8:
+	case 0x062A: case 0x0453: case 0x0363: case 0x0111: case 0x016A: case 0x09BA: case 0x0629: case 0x01F0: case 0x09B7: case 0x0997: case 0x08F8: case 0x08CA:
+	case 0x07D3: case 0x0793: case 0x0776: case 0x070D: case 0x06D1: case 0x06CF: case 0x06C8: case 0x060D: case 0x05AA: case 0x0566: case 0x054C: case 0x04E4:
+	case 0x04BB: case 0x042C: case 0x03F0: case 0x03E0: case 0x03CB: case 0x0381: case 0x0373: case 0x0349: case 0x0343: case 0x0342: case 0x0340: case 0x033F:
+	case 0x033E: case 0x030D: case 0x01E8: case 0x01B7: case 0x01B6: case 0x01B4: case 0x0180: case 0x0173: case 0x0169: case 0x00C0: case 0x0928:
+		return true;
+	case 0x0518: ref(t, args[5]) = 7500; return true;               // CREATE_FORSALE_PROPERTY_PICKUP (handle only)
+	case 0x0A40: ref(t, args[4]) = 8500; return true;               // CREATE_USER_3D_MARKER (handle only)
+	case 0x0176: case 0x08E1: case 0x07AF: case 0x058C: { size_t o = op == 0x058C || op == 0x08E1 ? 0 : 1; ref(t, args[o]) = 0; return true; }   // GET_OBJECT_HEADING / FIND_NUMBER_TAGS_TAGGED / GET_PLAYER_GROUP / GET_PROGRESS_PERCENTAGE
+	case 0x01BB: ref(t, args[1]) = 0; ref(t, args[2]) = 0; ref(t, args[3]) = 0; return true;   // GET_OBJECT_COORDINATES (origin: scripted objects are not created)
+	case 0x0400: ref(t, args[4]) = 0; ref(t, args[5]) = 0; ref(t, args[6]) = 0; return true;   // GET_OFFSET_FROM_OBJECT_IN_WORLD_COORDS
+	case 0x034D: condResult(t, true, neg); return true;             // ROTATE_OBJECT: reports finished so scripts do not wait on an object that does not exist
 	case 0x08AB: case 0x00FF: case 0x0118: condResult(t, false, neg); return true;   // HAS_STREAMED_SCRIPT_LOADED / LOCATE_CHAR_ON_FOOT_3D / IS_CHAR_DEAD (never loaded / false / alive)
 	case 0x04F8: case 0x014C: case 0x0914: return true;                                               // ADD_SET_PIECE / SWITCH_CAR_GENERATOR / REGISTER_STREAMED_SCRIPT_INTERNAL
 	case 0x09E8: ref(t, args[1]) = 0; return true;   // GET_CHAR_AREA_VISIBLE: always outside any interior (area 0); DEVIATION: interiors are not tracked
