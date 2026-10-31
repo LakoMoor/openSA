@@ -1532,7 +1532,7 @@ void RadioChooseTracks(int st) {
 		int id = kBanterFirst[st];
 		if (id == 1922 || banterRecent(id)) id = -1;
 		if (id >= 0) return id;
-		if (st == 0) return fromList(kBanterAll);   // emergency AA: 0x441C10 (night test, game time) picks the night list 0x8C8E30 else the whole range
+		if (st == 0) return fromList(kBanterAll);   // emergency AA: 0x441C10 = CGameLogic::LaRiotsActiveHere (riot flag 0xB72958 set by the story script, false here) -> the whole range; during the riots it would pick 0x8C8E30
 		if (!RadioChance(0.6f)) return -1;
 		int hour = ((int)(gGameMinutes / 60.0f)) % 24;
 		bool rain = willWeatherBe(16) || willWeatherBe(8);
@@ -1556,7 +1556,7 @@ void RadioChooseTracks(int st) {
 		gRadioQueue.push_back((size_t)id);
 		fprintf(gLog, "radio: DJ banter %d on station %d\n", id, st);
 		return true;
-	};   // DEVIATIONS: script-driven special banter states (0xB62C73) not ported; the 0x441C10 night test for station 0 and the 0xB72914 gate are assumed (night / false); window keeps the last N entries of a 15-entry history
+	};   // DEVIATIONS: script-driven special banter states (0xB62C73) not ported; the riot flag for station 0 is fixed to false and the 0xB72914 gate is assumed false; window keeps the last N entries of a 15-entry history
 	if (!RadioChance(0.95f)) {
 		if (RadioChance(0.5f)) queueIdent();
 		if (!queueDJ()) queueAdvert();
