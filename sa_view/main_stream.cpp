@@ -2185,8 +2185,25 @@ float SurfaceAdhesion(int surf) {
 vp::CarPhysics gPhys;
 bool gPhysActive = false;
 
-vp::V3 gExhaust;
-bool gExhaustOk = false;
+vp::V3 gExhaust, gEngineDummy;
+bool gExhaustOk = false, gEngineOk = false;
+// CVehicle::AddDamagedVehicleParticles (0x6D2A80, gta-reversed): health in [250, 650) and not submerged -> "overheat_car" (electric engines: overheat_car_electric) at the engine dummy,
+// the system time frozen at 1 - (health - 250) / 400 (SetConstTime), so the EMRATE curve (0 -> 60 -> 0 over 0..1) peaks at health 450. gOverheat is read by DrawFxAll.
+// DEVIATIONS: the car velocity is not added to the particles (SetVelAdd), electric engines use the normal system, the DUMMY_ENGINE frame is the model's "engine" frame.
+struct { bool on = false; float pos[3] = {}, t = 0.0f; } gOverheat;
+FxEmitterSim *FxSimFor(const std::string &name, bool emitting);
+void UpdateOverheat() {
+	gOverheat.on = false;
+	if (!gPhysActive || !gEngineOk || gDriveGen < 0) return;
+	if (gPhys.health >= 650.0f || gPhys.health < 250.0f || gPhys.drowning) return;
+	gOverheat.on = true;
+	FxSimFor("overheat_car", true);   // creates the system on first use
+	gOverheat.t = 1.0f - (gPhys.health - 250.0f) / 400.0f;
+	gOverheat.pos[0] = gPhys.pos.x + gPhys.right.x * gEngineDummy.x + gPhys.fwd.x * gEngineDummy.y + gPhys.up.x * gEngineDummy.z;
+	gOverheat.pos[1] = gPhys.pos.y + gPhys.right.y * gEngineDummy.x + gPhys.fwd.y * gEngineDummy.y + gPhys.up.y * gEngineDummy.z;
+	gOverheat.pos[2] = gPhys.pos.z + gPhys.right.z * gEngineDummy.x + gPhys.fwd.z * gEngineDummy.y + gPhys.up.z * gEngineDummy.z;
+	{ static bool logged = false; if (!logged) { logged = true; fprintf(gLog, "fx: overheat at (%.2f %.2f %.2f), car (%.2f %.2f %.2f), engine dummy local (%.2f %.2f %.2f), time %.2f%c", gOverheat.pos[0], gOverheat.pos[1], gOverheat.pos[2], gPhys.pos.x, gPhys.pos.y, gPhys.pos.z, gEngineDummy.x, gEngineDummy.y, gEngineDummy.z, gOverheat.t, 10); } }
+}
 void FxExhaust(float ticks, float gas, bool wet);
 
 void StartPhysics(CarGen &g) {
@@ -2205,10 +2222,13 @@ void StartPhysics(CarGen &g) {
 	}
 	float size = 0.7f;
 	if (const sa::VehicleDef *vd = gW.ide.FindVehicle(g.model)) if (vd->wheelScaleFront > 0.0f) size = vd->wheelScaleFront;
+	gEngineOk = false;
+	if (rw::Frame *ef = FindNamedFrame(proto->clump->getFrame(), "engine")) { rw::V3d p = ef->getLTM()->pos; gEngineDummy = {p.x, p.y, p.z}; gEngineOk = true; }
 	gExhaustOk = false;
 	if (rw::Frame *ef = FindNamedFrame(proto->clump->getFrame(), "exhaust")) { rw::V3d p = ef->getLTM()->pos; gExhaust = {p.x, p.y, p.z}; gExhaustOk = p.x != 0.0f || p.y != 0.0f || p.z != 0.0f; }
 	gPhys.init(*gDriveHandling, wp, size);
 	gPhys.place({g.pos.x, g.pos.y, g.pos.z + 0.1f}, g.angle);
+	if (const char *hh = getenv("SA_CARHEALTH")) gPhys.health = (float)atof(hh);   // test aid
 	gPhysActive = true;
 	fprintf(gLog, "physics: car %d wheel size %.2f, mass %.0f, front wheel z %.2f\n", g.model, size, gDriveHandling->mass, wp[0].z);
 }
@@ -2272,6 +2292,7 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 	}
 	gPhys.step(dt * 50.0f, in, ground);
 	FxExhaust(dt * 50.0f, std::max(0.0f, in.gas), false);
+	UpdateOverheat();
 	if (!getenv("SA_NOBUOY") && gDriveHandling && gDriveHandling->percentSubmerged > 0) {   // cBuoyancy port (VehiclePhysics.cpp). DEVIATION: the collision box is ESTIMATED from the wheel dummies (x +-0.25 beyond the wheels, y wheels*1.25, z from wheel centre - 0.35 to +1.5 above), flat water.
 		float xm = 0, ymin = 1e9f, ymax = -1e9f, zmin = 1e9f;
 		for (int i = 0; i < 4; i++) { xm = std::max(xm, std::fabs(gPhys.wheelLocal[i].x)); ymin = std::min(ymin, gPhys.wheelLocal[i].y); ymax = std::max(ymax, gPhys.wheelLocal[i].y); zmin = std::min(zmin, gPhys.wheelLocal[i].z); }
@@ -3843,6 +3864,7 @@ void DrawFxAll(float dt) {
 		if (!sm) continue;
 		float o0[3] = {0, 0, 0};
 		const float *o = sm == testSim ? org : o0;
+		if (kv.first == "overheat_car") { sm->emitting = gOverheat.on; if (gOverheat.on) { sm->time = gOverheat.t; o = gOverheat.pos; if (getenv("SA_FXSIZE")) sm->defMult.size = (float)atof(getenv("SA_FXSIZE")); if (getenv("SA_FXALPHA")) sm->defMult.a = (float)atof(getenv("SA_FXALPHA")); } }
 		sm->update(dt, o);
 		std::vector<FxBillboard> bb;
 		sm->collect(bb);
