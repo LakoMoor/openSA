@@ -1612,9 +1612,16 @@ bool RadioNextTrack() {
 
 // Ambience playback (CAEAmbienceTrackManager::Service 0x4D76C0 states, simplified): own waveOut device + Ogg stream, the track loops; volume in dB follows UpdateAmbienceTrackAndVolume for the plain
 // zone case: a new track starts at -34 dB and rises 1 dB per frame up to -6 dB, a track being replaced fades out 0.4 dB per frame and stops under -40 dB.
-// DEVIATIONS: starts at the beginning (the original starts at a random time / resumes the previous position), a zone's distance attenuation (zones 5, 10: GetDistanceAttenuation) and the camera
-// height fade of zone 4 are not applied, no frequency factor, mono tracks are duplicated to both channels, no pause handling.
+// DEVIATIONS: starts at the beginning (the original starts at a random time / resumes the previous position), no frequency factor, mono tracks are duplicated to both channels, no pause handling. Zone 5/10 distance attenuation and the zone 4 height fade (constants from gta-reversed) set the target volume, approached 1 dB per frame.
 int gAmbWant = -1;
+float gAmbTargetVol = -6.0f;
+// CAEAudioEnvironment::GetDistanceAttenuation (0x4D7F20): table of 1280 dB values (read from the exe 0x8AC270) at 0.1 m steps, -100 dB beyond 128 m
+float DistanceAttenuation(float dist) {
+	static const float kTable[1280] = {
+#include "AttenTable.inc"
+	};
+	return dist < 128.0f ? kTable[(unsigned)std::floor(dist / 0.1f)] : -100.0f;
+}
 struct AmbiencePlayer {
 	TrackTable table;
 	bool tableOk = false, tried = false, streaming = false;
@@ -1667,7 +1674,7 @@ void AmbienceService() {
 			if (gAmbWant >= 0 && AmbienceStart(gAmbWant)) { a.track = gAmbWant; a.vol = -34.0f; fprintf(gLog, "ambience: playing track %d%c", gAmbWant, 10); }
 			else if (gAmbWant >= 0) { fprintf(gLog, "ambience: track %d failed to open%c", gAmbWant, 10); gAmbWant = -1; }
 		}
-	} else if (a.track >= 0) a.vol = std::min(-6.0f, a.vol + 1.0f);
+	} else if (a.track >= 0) a.vol = a.vol < gAmbTargetVol ? std::min(gAmbTargetVol, a.vol + 1.0f) : std::max(gAmbTargetVol, a.vol - 1.0f);
 	if (!a.streaming || !a.h) return;
 	float gain = std::pow(10.0f, a.vol / 20.0f);
 	for (int i = 0; i < 4; i++) {
@@ -1724,6 +1731,11 @@ void UpdateAmbience() {
 		{34,162},{36,155},{37,144},{39,163},{41,169},{44,152},{48,137},{50,173},{51,156},{64,151},{66,170},{67,171}};
 	int track = -1;
 	if (az) for (auto &m : kMap) if (m.zone == az->id) track = m.track;
+	gAmbTargetVol = -6.0f;
+	if (az && (az->id == 5 || az->id == 10) && !az->box) {   // volume by the distance to the sphere centre: attenuation(|centre - camera| * 0.2) - 6
+		float ex = az->a[0] - camPos.x, ey = az->a[1] - camPos.y, ez = az->a[2] - camPos.z;
+		gAmbTargetVol = DistanceAttenuation(std::sqrt(ex * ex + ey * ey + ez * ez) * 0.2f) - 6.0f;
+	} else if (az && az->id == 4) gAmbTargetVol = camPos.z <= 1372.0f ? -6.0f - 9.0f * (1372.0f - camPos.z) : -6.0f;   // zone 4 (mountain): quieter below z 1372 (gta-reversed constants)
 	if (track != cur) {
 		cur = track; gAmbWant = track;
 		fprintf(gLog, "ambience: zone %s (id %d) -> track %d%c", az ? az->name.c_str() : "-", az ? az->id : -1, track, 10);
