@@ -57,6 +57,8 @@ public:
 	std::vector<std::pair<std::string, bool>> audioZoneSwitches;   // SWITCH_AUDIO_ZONE (name, enable) in execution order
 	std::map<uint16_t, uint32_t> unhandled;   // opcode -> times executed without a handler
 	std::map<uint16_t, uint32_t> handled;
+	float playerPos[3] = {0, 0, 0};   // fed by the viewer every frame (LOCATE_CHAR_* / IS_CHAR_IN_AREA conditions)
+	bool playerPosValid = false;
 	uint64_t commandsRun = 0;
 	std::vector<uint32_t> spawned;   // start offsets of threads created by START_NEW_SCRIPT
 

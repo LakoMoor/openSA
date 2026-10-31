@@ -1,4 +1,5 @@
 #include "ScriptVM.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -208,8 +209,22 @@ bool ScriptVM::execute(ScmThread &t, uint16_t op, bool neg, std::vector<ScmArg> 
 	case 0x0842: ref(t, args[1]) = 1; return true;                   // GET_CITY_PLAYER_IS_IN (1 = Los Santos, game start)
 	case 0x0652: ref(t, args[1]) = 0; return true;                   // GET_INT_STAT (all stats 0)
 	case 0x04AE: ref(t, args[0]) = getI(t, args[1]); return true;    // SET_VAR_INT_TO_CONSTANT
-	case 0x03B0: case 0x0491: case 0x00FE: case 0x00EC: case 0x00A3:
-		condResult(t, false, neg); return true;                      // IS_GARAGE_OPEN / HAS_CHAR_GOT_WEAPON / LOCATE_CHAR_ANY_MEANS_3D/2D / IS_CHAR_IN_AREA_2D
+	case 0x03B0: case 0x0491:
+		condResult(t, false, neg); return true;                      // IS_GARAGE_OPEN / HAS_CHAR_GOT_WEAPON
+	// Position conditions on a character, answered for the viewer's player (setPlayerPos, fed every frame): LOCATE_CHAR_ANY_MEANS_2D 00EC / ON_FOOT_2D 00ED (char, x, y, rx, ry, flag),
+	// LOCATE_CHAR_ANY_MEANS_3D 00FE / ON_FOOT_3D 00FF (char, x, y, z, rx, ry, rz, flag), IS_CHAR_IN_AREA_2D 00A3 (char, x1, y1, x2, y2, flag).
+	// DEVIATIONS: every character handle is taken as the player (scripted characters are never created), the player is always on foot (in-car variants are false), no drawn marker.
+	case 0x00EC: case 0x00ED: case 0x00FE: case 0x00FF: case 0x00A3: {
+		bool threeD = op == 0x00FE || op == 0x00FF;
+		float px = playerPos[0], py = playerPos[1], pz = playerPos[2], res;
+		if (op == 0x00A3) { float x1 = getF(t, args[1]), y1 = getF(t, args[2]), x2 = getF(t, args[3]), y2 = getF(t, args[4]); res = px >= std::min(x1, x2) && px <= std::max(x1, x2) && py >= std::min(y1, y2) && py <= std::max(y1, y2); }
+		else {
+			float x = getF(t, args[1]), y = getF(t, args[2]), rx = getF(t, args[threeD ? 4 : 3]), ry = getF(t, args[threeD ? 5 : 4]);
+			res = std::fabs(px - x) <= rx && std::fabs(py - y) <= ry;
+			if (threeD) res = res && std::fabs(pz - getF(t, args[3])) <= getF(t, args[6]);
+		}
+		condResult(t, playerPosValid && res != 0.0f, neg); return true;
+	}
 	// IS/SET/CLEAR_{GLOBAL,LOCAL}_VAR_BIT_{CONST,VAR,LVAR} (08B4..08C5): (variable, bit index); the const/var/lvar forms differ only in how the bit index is encoded, which getI resolves.
 	case 0x08B4: case 0x08B5: case 0x08B6: case 0x08B7: case 0x08B8: case 0x08B9:
 		condResult(t, ((uint32_t)ref(t, args[0]) >> (getI(t, args[1]) & 31)) & 1u, neg); return true;
@@ -245,7 +260,7 @@ bool ScriptVM::execute(ScmThread &t, uint16_t op, bool neg, std::vector<ScmArg> 
 	case 0x01BB: ref(t, args[1]) = 0; ref(t, args[2]) = 0; ref(t, args[3]) = 0; return true;   // GET_OBJECT_COORDINATES (origin: scripted objects are not created)
 	case 0x0400: ref(t, args[4]) = 0; ref(t, args[5]) = 0; ref(t, args[6]) = 0; return true;   // GET_OFFSET_FROM_OBJECT_IN_WORLD_COORDS
 	case 0x034D: condResult(t, true, neg); return true;             // ROTATE_OBJECT: reports finished so scripts do not wait on an object that does not exist
-	case 0x08AB: case 0x00FF: case 0x0118: condResult(t, false, neg); return true;   // HAS_STREAMED_SCRIPT_LOADED / LOCATE_CHAR_ON_FOOT_3D / IS_CHAR_DEAD (never loaded / false / alive)
+	case 0x08AB: case 0x0118: condResult(t, false, neg); return true;   // HAS_STREAMED_SCRIPT_LOADED / LOCATE_CHAR_ON_FOOT_3D / IS_CHAR_DEAD (never loaded / false / alive)
 	case 0x04F8: case 0x014C: case 0x0914: return true;                                               // ADD_SET_PIECE / SWITCH_CAR_GENERATOR / REGISTER_STREAMED_SCRIPT_INTERNAL
 	case 0x09E8: ref(t, args[1]) = 0; return true;   // GET_CHAR_AREA_VISIBLE: always outside any interior (area 0); DEVIATION: interiors are not tracked
 	case 0x0002: t.ip = label(t, getI(t, args[0])); return true;

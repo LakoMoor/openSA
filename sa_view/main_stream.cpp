@@ -4328,7 +4328,9 @@ void Idle(float dt) {
 	{
 		static size_t appliedSwitches = 0;
 		if (gVMRunning && !getenv("SA_NOSCRIPT")) {
+			gVM.playerPos[0] = camPos.x; gVM.playerPos[1] = camPos.y; gVM.playerPos[2] = camPos.z - 1.7f; gVM.playerPosValid = gWalk;   // on-foot player = the walking camera (eye 1.7 m)
 			gVM.tick((uint32_t)std::min(100.0f, dt * 1000.0f));
+			{ static size_t seenSpawns = 0; if (gVM.spawned.size() != seenSpawns) { fprintf(gLog, "script: %zu threads started so far (last at ip %u), player at %.1f %.1f%c", gVM.spawned.size(), gVM.spawned.back(), camPos.x, camPos.y, 10); seenSpawns = gVM.spawned.size(); } }
 			for (; appliedSwitches < gVM.audioZoneSwitches.size(); appliedSwitches++) {
 				const auto &sw = gVM.audioZoneSwitches[appliedSwitches];
 				for (auto &z : gAuZones) if (!_stricmp(z.name.c_str(), sw.first.c_str())) z.active = sw.second;
