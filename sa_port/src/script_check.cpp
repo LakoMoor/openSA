@@ -6,6 +6,7 @@
 #include <string>
 extern "C" {}
 #include <cstring>
+extern uint32_t gTraceLo, gTraceHi, gTraceLeft;
 extern volatile uint32_t gDbgIp, gDbgOp, gDbgStage;
 #include <thread>
 #include <chrono>
@@ -36,6 +37,8 @@ int main(int argc, char **argv)
 	std::printf("unhandled opcodes: %zu distinct\n", u.size());
 	for (size_t i = 0; i < u.size() && i < 100; i++)
 		std::printf("  %04X %s x%u\n", u[i].second, ScriptVM::opName(u[i].second), u[i].first);
+	vm.dumpThreads(stdout);
+	if (argc > 4) { gTraceLo = atoi(argv[3]); gTraceHi = atoi(argv[4]); gTraceLeft = 80; vm.tick(20); vm.tick(20); }
 	for (uint32_t ip : vm.spawned) std::printf("spawned at %u\n", ip);
 	int k = 0;
 	for (auto &kv : vm.zonePopType) { if (k++ < 8) std::printf("zone %s -> %d\n", kv.first.c_str(), kv.second); }

@@ -6,6 +6,7 @@
 #include <fstream>
 #include <unordered_map>
 
+uint32_t gTraceLo = 0, gTraceHi = 0, gTraceLeft = 0;   // script_check aid: print up to gTraceLeft executed ops with ip in [lo, hi)
 volatile uint32_t gDbgIp = 0, gDbgOp = 0, gDbgStage = 0;   // watchdog aid for script_check
 namespace {
 struct CmdInfo {
@@ -385,6 +386,7 @@ void ScriptVM::runThread(ScmThread &t)
 		if (op == 0x05B6) { t.ip += 128; continue; }
 		if (op == 0x004C) fixed = 1;
 		gDbgIp = t.ip - 2; gDbgOp = op; gDbgStage = 1;
+		if (gTraceLeft && gDbgIp >= gTraceLo && gDbgIp < gTraceHi) { gTraceLeft--; std::printf("  trace ip %u op %04X %s\n", gDbgIp, op, opName(op)); }
 		static uint16_t lastOps[16]; static uint32_t lastIps[16]; static int lastN = 0;
 		lastOps[lastN % 16] = op; lastIps[lastN % 16] = t.ip - 2; lastN++;
 		if (!readArgs(t, fixed, ci->vararg != 0, args)) {

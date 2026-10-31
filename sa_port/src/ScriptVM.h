@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <cstdio>
 #include <deque>
 #include <functional>
 #include <map>
@@ -49,6 +50,7 @@ public:
 	static const char *opName(uint16_t op);
 	uint32_t nowMs() const { return m_now; }
 	size_t threadCount() const { return m_threads.size(); }
+	void dumpThreads(FILE *f) const { for (const ScmThread &t : m_threads) std::fprintf(f, "thread '%s' ip %u wake in %d ms active %d\n", t.name.c_str(), t.ip, (int)(t.wakeMs - m_now), (int)t.active); }
 
 	// zone_key (8 chars upper-case) -> population type, filled by SET_ZONE_POPULATION_TYPE
 	std::map<std::string, int> zonePopType;
