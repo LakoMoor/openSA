@@ -2389,7 +2389,9 @@ void ApplyCarDamage(rw::Clump *c, const char *part, int group, float impulse) {
 	}
 	if (st != before) { ShowCarPart(c, part, st); fprintf(gLog, "car damage: %s status %d -> %d (impulse %.1f)%c", part, before, st, impulse, 10); }
 }
+float gCarDmgIntensity = 0.0f;   // CVehicle::m_fDamageIntensity: strongest impact since the doors were last processed
 void DamageCarAtContact(rw::Clump *c, const vp::V3 &pt, const vp::V3 &fwd, float impulse, float mass) {
+	gCarDmgIntensity = std::max(gCarDmgIntensity, impulse);
 	if (!c || impulse <= mass / 1500.0f * 25.0f) return;
 	float lon = vp::dot(pt, fwd), lat = pt.x * fwd.y - pt.y * fwd.x;   // lat > 0: right of the car
 	const char *side = lat < 0.0f ? "l" : "r";
@@ -2411,6 +2413,90 @@ void DamageCarAtContact(rw::Clump *c, const vp::V3 &pt, const vp::V3 &fwd, float
 	}
 }
 void FxAddBlood(const float pos[3], const float dir[3], int amount);
+
+// Swinging doors (CAutomobile::ProcessSwingingDoor 0x6A9D70 + CDoor::Process 0x6F4040 / ProcessImpact 0x6F4540, constants from CAutomobile::CAutomobile 0x6B0C0B..: front /
+// rear doors +-0.4 pi about Z (bus +-pi/2, van rear +-pi/2 about +-X), bonnet +-0.3 pi about X, boot -0.4 pi / 0.5 pi / -0.3 pi about X by the model flags). A closed door only
+// pops open when the frame's damage intensity exceeds 100 and its acceleration exceeds a random 0.75..1.5 x 0.1 (doors only; the bonnet opens through damage); an open door swings
+// with the car's acceleration (Process) until it slams shut. DEVIATIONS: the door "open" flag is kept here (not in a CDamageManager status), a slammed door just clears the flag,
+// a bonnet that stays open at > 0.4 forward speed is hidden without the flying component object, the CVehicle::SetComponentRotation rest matrix is assumed identity, no door
+// sound event on slam / pop, acceleration reference is the speed at the end of the previous call.
+struct CarDoor { float open = 0, angle = 0, vel = 0; int dirn = 0, axis = 2; unsigned extra = 0; bool isOpen = false; rw::Frame *f = nullptr; };
+struct CarDoors { CarDoor d[6]; vp::V3 oldMove, oldTurn; bool have = false; };
+std::unordered_map<rw::Clump *, CarDoors> gCarDoors;
+void InitCarDoors(rw::Clump *c, CarDoors &cd, unsigned mflags) {
+	const float PI = 3.14159265f;
+	static const char *names[6] = {"bonnet_dummy", "boot_dummy", "door_lf_dummy", "door_rf_dummy", "door_lr_dummy", "door_rr_dummy"};
+	bool van = mflags & 1, bus = mflags & 2, revBonnet = mflags & 0x10, hangBoot = mflags & 0x20, tailBoot = mflags & 0x40;
+	enum { AX = 0, AY = 1, AZ = 2, NX = 3, NY = 4, NZ = 5, BASED = 0x10, LOWG = 0x20 };
+	auto init = [&](int i, float open, int dirn, int axis, unsigned extra) { cd.d[i].open = open; cd.d[i].dirn = dirn; cd.d[i].axis = axis; cd.d[i].extra = extra; };
+	init(2, bus ? -PI / 2 : -0.4f * PI, NY, AZ, BASED); init(3, bus ? PI / 2 : 0.4f * PI, NY, AZ, BASED);
+	if (van) { init(4, -PI / 2, AX, AZ, BASED); init(5, PI / 2, NX, AZ, BASED); } else { init(4, -0.4f * PI, NY, AZ, BASED); init(5, 0.4f * PI, NY, AZ, BASED); }
+	if (revBonnet) init(0, -0.3f * PI, NY, AX, LOWG); else init(0, 0.3f * PI, AY, AX, LOWG);
+	if (hangBoot) init(1, -0.4f * PI, NZ, AX, BASED); else if (tailBoot) init(1, 0.5f * PI, AZ, AX, BASED); else init(1, -0.3f * PI, NY, AX, BASED);
+	for (int i = 0; i < 6; i++) cd.d[i].f = FindNamedFrame(c->getFrame(), names[i]);
+}
+// returns true when the door slammed shut
+bool ProcessCarDoor(CarDoor &d, const vp::V3 &off, const vp::V3 &oldMove, const vp::V3 &oldTurn, float ts) {
+	vp::V3 vel = gPhys.getSpeed(off), old = oldMove + vp::cross(oldTurn, off), acc = vel - old;
+	acc.z += ts * ((d.extra & 0x20) ? 0.0016f : 0.008f);
+	float a3[3] = {vp::dot(acc, gPhys.right), vp::dot(acc, gPhys.fwd), vp::dot(acc, gPhys.up)};
+	float dv[3] = {0, 0, 0};
+	int dm = d.dirn; dv[dm % 3] = dm >= 3 ? -1.0f : 1.0f;
+	float sn = std::sin(d.angle), cs = std::cos(d.angle);
+	int ia = (d.axis + 1) % 3, ib = (d.axis + 2) % 3;
+	float na = sn * dv[ib] - cs * dv[ia], nb = sn * dv[ia] + cs * dv[ib];
+	dv[ia] = na; dv[ib] = nb;
+	float cr[3] = {a3[1] * dv[2] - a3[2] * dv[1], a3[2] * dv[0] - a3[0] * dv[2], a3[0] * dv[1] - a3[1] * dv[0]};
+	float ang = cr[d.axis];
+	if (std::fabs(ang) > 0.001f || std::fabs(d.vel) > 0.001f) d.vel += ang;
+	d.vel *= (d.extra & 0x20) ? 0.97f : 0.97f;
+	d.vel = std::max(-0.5f, std::min(0.5f, d.vel));
+	d.angle += d.vel;
+	bool pos = d.open >= 0.0f;
+	bool hitOpen = pos ? d.angle > d.open : d.angle < d.open, hitClosed = pos ? d.angle < 0.0f : d.angle > 0.0f;
+	if (hitOpen) { d.vel *= -0.8f; d.angle = d.open; }
+	else if (hitClosed) {
+		d.angle = 0.0f;
+		if ((d.extra & 0x10) && std::fabs(d.vel) > 0.1f) { d.vel = 0.0f; return true; }
+		d.vel *= (d.extra & 0x20) ? -0.9f : -0.4f;
+	}
+	return false;
+}
+void UpdateCarDoors(rw::Clump *c, float ts, unsigned mflags) {
+	CarDoors &cd = gCarDoors[c];
+	if (!cd.d[2].f && !cd.d[0].f && !cd.d[1].f) { InitCarDoors(c, cd, mflags); cd.oldMove = gPhys.moveSpeed; cd.oldTurn = gPhys.turnSpeed; }
+	static const char *parts[6] = {"bonnet", "boot", "door_lf", "door_rf", "door_lr", "door_rr"};
+	for (int i = 0; i < 6; i++) {
+		CarDoor &d = cd.d[i];
+		if (!d.f) continue;
+		vp::V3 off = gPhys.mul3({d.f->matrix.pos.x, d.f->matrix.pos.y, d.f->matrix.pos.z});
+		int st = CarPartState(c, parts[i]);
+		if (st == 3) continue;   // not present
+		if (st == 2) d.isOpen = true;
+		if (!d.isOpen && i != 0 && gCarDmgIntensity > 100.0f) {
+			float lim = (0.75f + 0.75f * (float)rand() / (float)RAND_MAX) * 0.1f;
+			vp::V3 vel = gPhys.getSpeed(off), old = cd.oldMove + vp::cross(cd.oldTurn, off), acc = vel - old;
+			float dir[3] = {0, 0, 0}; int dm = d.dirn; dir[dm % 3] = dm >= 3 ? -1.0f : 1.0f;
+			vp::V3 w = gPhys.right * dir[0] + gPhys.fwd * dir[1] + gPhys.up * dir[2];
+			float cr[3] = {acc.y * w.z - acc.z * w.y, acc.z * w.x - acc.x * w.z, acc.x * w.y - acc.y * w.x};
+			float ang = cr[d.axis];
+			if (d.open >= 0.0f ? ang > lim : ang < -lim) { d.isOpen = true; fprintf(gLog, "car door: %s pops open (accel %.3f)%c", parts[i], ang, 10); }
+		}
+		if (!d.isOpen) continue;
+		if (i == 0 && d.dirn == 1) d.vel += std::sin(d.angle + 0.1f) * 0.05f * vp::dot(gPhys.fwd, gPhys.moveSpeed);
+		if (ProcessCarDoor(d, off, cd.oldMove, cd.oldTurn, ts)) { d.isOpen = false; fprintf(gLog, "car door: %s slammed shut%c", parts[i], 10); }
+		float sn = std::sin(d.angle), cs = std::cos(d.angle);
+		rw::Matrix &m = d.f->matrix;
+		if (d.axis == 2) { m.right = {cs, sn, 0}; m.up = {-sn, cs, 0}; m.at = {0, 0, 1}; }
+		else { m.right = {1, 0, 0}; m.up = {0, cs, sn}; m.at = {0, -sn, cs}; }
+		static int logged = 0; if (d.isOpen && std::fabs(d.angle) > 0.05f && logged++ < 4) fprintf(gLog, "car door: %s angle %.2f vel %.3f%c", parts[i], d.angle, d.vel, 10);
+		if (i == 0 && d.isOpen && vp::dot(gPhys.moveSpeed, gPhys.fwd) > 0.4f && std::fabs(d.angle) > 0.01f) {
+			gCarPartState[c]["bonnet"] = 3; ShowCarPart(c, "bonnet", 3); d.isOpen = false; fprintf(gLog, "car door: bonnet blown off%c", 10);
+		}
+	}
+	cd.oldMove = gPhys.moveSpeed; cd.oldTurn = gPhys.turnSpeed;
+	gCarDmgIntensity = 0.0f;
+}
 
 void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 	CarGen &g = gCarGens[gDriveGen];
@@ -2517,6 +2603,7 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 		f->matrix.right = {gPhys.right.x, gPhys.right.y, gPhys.right.z};
 		f->matrix.up = {gPhys.fwd.x, gPhys.fwd.y, gPhys.fwd.z};
 		f->matrix.at = {gPhys.up.x, gPhys.up.y, gPhys.up.z};
+		UpdateCarDoors(g.clump, dt * 50.0f, gDriveHandling ? gDriveHandling->modelFlags : 0);
 		f->matrix.pos = g.pos;
 		f->matrix.update();
 		f->updateObjects();
