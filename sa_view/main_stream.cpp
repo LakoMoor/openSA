@@ -1388,6 +1388,8 @@ void PedSayPain(int pedModel, int row, const float pos[3]) {
 	int voice = pd && (pd->pedType == "CIVFEMALE" || pd->pedType == "PROSTITUTE") ? 1 : 2;
 	const int16_t *r = kPainLut[row][voice];
 	if (r[0] < 0) return;
+	static bool counted = false;
+	if (!counted) { counted = true; for (int v = 0; v < 3; v++) { SfxBank t; gSfx.loadBank(kBank[v], t); fprintf(gLog, "speech: bank %d %zu sounds, table max %d\n", kBank[v], t.sounds.size(), v == 0 ? 168 : v == 1 ? 130 : 100); } }
 	if (!loaded[voice]) { loaded[voice] = true; gSfx.loadBank(kBank[voice], banks[voice]); fprintf(gLog, "speech: pain bank %d has %zu sounds (table range up to %d)\n", kBank[voice], banks[voice].sounds.size(), 0); }
 	int n = r[1] - r[0] + 1, off = rand() % n, pick = -1, worst = -1;
 	for (int i = 0; i < std::min(20, n); i++) {
