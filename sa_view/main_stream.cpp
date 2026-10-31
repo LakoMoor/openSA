@@ -3926,7 +3926,7 @@ void FxExhaust(float ticks, float gas, bool wet) {
 // .25 .25 .25, mud .25 .12 .06; a 1, life .05), size .03 + .03 rnd, pos +-0.2 jitter, vel (rnd * -1.5 moveSpeed.xy, 2 + 1.5 rnd). Dust / sand: prt_sand, see below. Spin value m_fWheelSpinForAudio
 // as in CAutomobile::ProcessControl (gta-reversed Automobile.cpp:905..935; constants from the exe: spinning wheel +1, driven wheel in the air under gas +10, x0.5 (x0.25 for 4WD), rise 0.95 / fall 0.7).
 // DEVIATIONS: wet roads (CWeather::WetRoads) assumed 0 so the spray / splash variants and the wet-surface branch are never taken; the contact point is the vertical ground probe under the wheel, not the
-// physics colpoint; fx quality assumed high; lightMult 1.0; the extra tyre smoke of the SPINNING / SKIDDING states (prt_wheel smoke, skidmarks) is not done; car type multiplier is the plain car one.
+// physics colpoint; fx quality assumed high; lightMult 1.0; the SKIDDING state and skidmarks are not done; SPINNING tyre smoke (prt_smokeII_3_expand, gravel / unflagged surfaces) is ported but the store targets of the final 0.9-scaled value in the asm tail 0x6DF2B9..0x6DF303 are assumed (life = rnd 0.5..1, lightMult default, no bike scaling); car type multiplier is the plain car one.
 void FxWheelDust(float ticks, float gas) {
 	if (!gPhysActive || gDriveGen < 0 || gSurfWheelFx.empty()) return;
 	static float acc = 0.0f, wheelSpin = 0.0f;
@@ -3961,6 +3961,18 @@ void FxWheelDust(float ticks, float gas) {
 			unsigned fx = mat >= 0 && mat < (int)gSurfWheelFx.size() ? gSurfWheelFx[mat] : 0;
 			if (const char *da = getenv("SA_DUSTALL")) fx = atoi(da) > 1 ? (unsigned)atoi(da) : 8;   // test aid: every surface makes dust (or the given surface mask: 1 grass 2 gravel 4 mud 8 dust 16 sand)
 			if (speed >= 1.0f && !(fx & 64)) continue;   // dispatcher: fast wheels only on IsSand surfaces
+			if (spinning && (fx == 0 || fx == 2)) {   // SPINNING tyre smoke (0x6DF197): the dispatcher returns 1 for gravel and for surfaces with no wheel-fx flag
+				FxEmitterSim *ss = FxSimFor("prt_smokeII_3_expand", false);
+				if (ss && ss->alive() < 2000) {
+					FxMult m; m.r = 0.9f; m.g = 0.9f; m.b = 1.0f; m.a = 0.5f; m.size = 1.0f; m.rot = 1.0f; m.life = 0.5f;
+					if (speed > 0.15f) { m.a = 0.3f; m.size = 0.5f; }
+					float sp = std::fabs(wheelSpin);   // helper 0x41BD90 is lerp(a, b, rand / 32767)
+					float v[3] = {rnd() * sp * gPhys.moveSpeed.x * -30.0f, rnd() * sp * gPhys.moveSpeed.y * -30.0f, (float)(rand() % 10000) * 1e-4f * 0.8f};
+					m.life = 0.5f + 0.5f * rnd();
+					float p[3] = {w.x, w.y, gz};
+					ss->addParticle(p, v, m);
+				}
+			}
 			if (fx & 7) {   // grass / gravel / mud: prt_wheeldirt, three particles
 				if (!(sw || (sw = FxSimFor("prt_wheeldirt", false)))) continue;
 				FxMult m; m.life = 0.05f; m.a = 1.0f; m.rot = 0.0f;
