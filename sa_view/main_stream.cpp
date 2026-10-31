@@ -2149,10 +2149,10 @@ HandlingCfg gHandling;
 // (engineAccel * 0.14 m/s^2) and the 2.8 m wheelbase are fitted guesses, not read from the exe.
 // Rigid-body driving (default; SA_KINEMATIC=1 selects the old kinematic prototype): VehiclePhysics.cpp, a port of CPhysical / CAutomobile suspension / CVehicle::ProcessWheel /
 // cTransmission. Wheel positions come from the model's wheel dummies, wheel size from vehicles.ide. DEVIATIONS: wheel rays are vertical probes against the COL ground
-// (not lines along the suspension axis against all geometry), the ground normal comes from 3 samples, tyre adhesion from surface.dat/surfinfo.dat assuming row index = COL surface id (no wet multiplier / TYRE_GRIP), world collision is the old 5-sphere push-out plus the static-B impulse of CPhysical::ApplyCollision (elasticity 0.05 ASSUMED, no damage, no vehicle-vs-vehicle), steering input smoothing 0.1 / tick is assumed,
+// (not lines along the suspension axis against all geometry), the ground normal comes from 3 samples, tyre adhesion from surface.dat/surfinfo.dat with row index = COL surface id (no wet multiplier / TYRE_GRIP), world collision is the old 5-sphere push-out plus the static-B impulse of CPhysical::ApplyCollision (elasticity 0.05 ASSUMED, no damage, no vehicle-vs-vehicle), steering input smoothing 0.1 / tick is assumed,
 // no wheel rotation / steering visuals, no damage.
 // Tyre adhesion by surface: data/surface.dat (lower-triangle matrix of adhesion groups) + data/surfinfo.dat (group per surface). SurfaceInfos_c::GetAdhesiveLimit
-// = limits[ground group][RUBBER] for a wheel. ASSUMPTION: the surfinfo.dat row index is the COL surface id.
+// = limits[ground group][RUBBER] for a wheel. The surfinfo.dat row index is the COL surface id (checked: SurfaceInfos_c::GetSurfaceIdFromName in gta-reversed maps all 178 named rows to their file order; DEFAULT = 0).
 std::vector<int> gSurfGroup;
 float gAdhLimits[6][6];
 bool gAdhLoaded = false;
