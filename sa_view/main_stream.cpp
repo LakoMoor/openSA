@@ -2311,6 +2311,36 @@ void CarVsTraffic();
 double gNow = 0, gShotFxTime = -1;   // test aid SA_SHOTONFX=1: the SA_SHOT screenshot is taken 0.25 s after the first collision/blood fx
 void FxBurst(const char *name, const float pos[3], int count);
 void CarCollisionFx(const float contact[3], float impulse);
+// Visual panel damage (step 11, first slice): swaps the intact "<part>_ok" atomic for the "<part>_dam" one, the same pairs CVehicleModelInfo / CAutomobile::SetPanelDamage switch between.
+// DEVIATIONS: the original decides per panel through CDamageManager::ApplyDamage (impact intensity vs. per-panel thresholds, door / panel status levels, doors hanging off, bumpers
+// dropping) - here: a wall hit that costs health damages the part facing the contact point (front: bonnet + front bumper + the wing on that side, rear: boot + rear bumper,
+// sides: the doors on that side); no partial states, no separate "dam" LOD, windows / lights not touched.
+void DamageCarPart(rw::Clump *c, const char *part) {
+	if (!c) return;
+	std::string ok = std::string(part) + "_ok", dam = std::string(part) + "_dam";
+	bool did = false;
+	FORLIST(lnk, c->atomics) {
+		rw::Atomic *a = rw::Atomic::fromClump(lnk);
+		const char *n = FrameName(a->getFrame());
+		if (!_stricmp(n, ok.c_str())) { a->object.object.flags &= ~rw::Atomic::RENDER; did = true; }
+		else if (!_stricmp(n, dam.c_str())) { a->object.object.flags |= rw::Atomic::RENDER; did = true; }
+	}
+	fprintf(gLog, "car damage: part %s %s%c", part, did ? "swapped to damaged" : "has no _ok/_dam pair", 10);
+}
+void DamageCarAtContact(rw::Clump *c, const vp::V3 &pt, const vp::V3 &fwd) {
+	float lon = vp::dot(pt, fwd), lat = pt.x * fwd.y - pt.y * fwd.x;   // lat > 0: right of the car
+	const char *side = lat < 0.0f ? "l" : "r";
+	char b[32];
+	if (std::fabs(lon) > std::fabs(lat) * 0.8f) {
+		bool front = lon > 0.0f;
+		DamageCarPart(c, front ? "bonnet" : "boot");
+		DamageCarPart(c, front ? "bump_front" : "bump_rear");
+		if (front) { snprintf(b, sizeof b, "wing_%sf", side); DamageCarPart(c, b); }
+	} else {
+		snprintf(b, sizeof b, "door_%sf", side); DamageCarPart(c, b);
+		snprintf(b, sizeof b, "door_%sr", side); DamageCarPart(c, b);
+	}
+}
 void FxAddBlood(const float pos[3], const float dir[3], int amount);
 
 void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
@@ -2401,6 +2431,7 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 				vp::V3 pt = {c.x - n.x * 0.9f - gPhys.pos.x, c.y - n.y * 0.9f - gPhys.pos.y, getenv("SA_WALLSPHEREZ") ? c.z - gPhys.pos.z : 0.0f};   // DEVIATION: the wall impulse is applied at centre-of-mass height (the 5-sphere push-out contacts at sphere height made the car pitch and bounce airborne at 42 km/h); SA_WALLSPHEREZ=1 restores the sphere height
 				float before = gPhys.health, imp = gPhys.hitStatic(pt, n);
 				if (imp > 0.0f && gPhys.health < before) fprintf(gLog, "car damage: impulse %.1f loss %.1f health %.1f\n", imp, before - gPhys.health, gPhys.health);
+				if (imp > 0.0f && before - gPhys.health >= 5.0f) DamageCarAtContact(g.clump, pt, gPhys.fwd);
 				{ float wp[3] = {gPhys.pos.x + pt.x, gPhys.pos.y + pt.y, gPhys.pos.z + pt.z}; CarCollisionFx(wp, imp); }
 			}
 		}
