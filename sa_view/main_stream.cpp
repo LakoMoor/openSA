@@ -3870,6 +3870,7 @@ void DrawFxAll(float dt) {
 		sm->collect(bb);
 		const FxSystem *fs = gFx.proj.find(kv.first);
 		if (sm == testSim && !bb.empty()) { static float dl = 0; dl += dt; if (dl > 2.0f) { dl = 0; fprintf(gLog, "SA_FX first: pos %.1f %.1f %.1f half %.2f rgba %d %d %d %d tex %d cam %.1f %.1f %.1f\n", bb[0].pos[0], bb[0].pos[1], bb[0].pos[2], bb[0].halfX, bb[0].r, bb[0].g, bb[0].b, bb[0].a, bb[0].tex, camPos.x, camPos.y, camPos.z); } }
+		if (kv.first == "overheat_car" && !bb.empty() && getenv("SA_GENDBG")) { static int n = 0; if (n++ % 60 == 0) { const FxBillboard &b0 = bb[bb.size() / 2]; fprintf(gLog, "overheat bb: n %zu pos %.2f %.2f %.2f half %.2f rgba %d %d %d %d tex %d%c", bb.size(), b0.pos[0], b0.pos[1], b0.pos[2], b0.halfX, b0.r, b0.g, b0.b, b0.a, b0.tex, 10); } }
 		if (!bb.empty() && fs) DrawFxSim(fs->prims[0], bb);
 	}
 	{ static float lt = 0; lt += dt; if (lt > 2.0f && !gFx.sims.empty()) { lt = 0; for (auto &kv : gFx.sims) if (kv.second && kv.second->alive()) fprintf(gLog, "fx %s: %zu alive\n", kv.first.c_str(), kv.second->alive()); } }
