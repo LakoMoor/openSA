@@ -2560,6 +2560,7 @@ void DriveUpdate(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 }
 
 ScriptVM gVM;
+bool gVMRunning = false;   // set once main.scm is loaded and the startup run is done
 PopCycle gPop;
 // Car model streaming, CStreaming::StreamOneNewCar / StreamVehiclesAndPeds_Always / ReclassifyLoadedCars: models are requested from a cargrp.dat group chosen from the
 // player zone's popcycle row (CCarCtrl::ChooseCarModelToLoad: 16 tries for a model that is not loaded yet), every 64 frames while fewer than 3 loaded cars suit the zone
@@ -2689,6 +2690,7 @@ void UpdateCars() {
 			if (const char *ex = getenv("SA_SCRIPTTICKS")) for (int i = atoi(ex); i > 0; i--) gVM.tick(20);   // experiment: run the main script longer before applying audio zone switches
 			for (auto &sw : gVM.audioZoneSwitches) for (auto &z : gAuZones) if (!_stricmp(z.name.c_str(), sw.first.c_str())) z.active = sw.second;   // CAudioZones::SwitchAudioZone (0x508320)
 			fprintf(gLog, "script: %zu audio zone switches applied%c", gVM.audioZoneSwitches.size(), 10);
+			gVMRunning = true;
 			fprintf(gLog, "script: %zu threads, %llu commands, %zu zone population types\n", gVM.threadCount(), (unsigned long long)gVM.commandsRun, gVM.zonePopType.size());
 		}
 		if (!gHandling.load(gameDir + "/data/handling.cfg")) fprintf(gLog, "handling.cfg failed to load\n");
@@ -4320,6 +4322,21 @@ void Idle(float dt) {
 	UpdateDoorSounds(dt);
 	UpdateWeaponSound(dt);
 	UpdatePendingSpeech();
+	// Runtime script loop (step 10, first slice): after the startup run the main script keeps ticking with the frame time (SA_NOSCRIPT=1 turns it off), new SWITCH_AUDIO_ZONE calls
+	// are applied as they happen. DEVIATIONS: the VM still answers player-state conditions as 'on foot, nothing happening' (no mission starts, cutscenes, wanted level), the original runs
+	// the scripts inside CTheScripts::Process at the game timer step.
+	{
+		static size_t appliedSwitches = 0;
+		if (gVMRunning && !getenv("SA_NOSCRIPT")) {
+			gVM.tick((uint32_t)std::min(100.0f, dt * 1000.0f));
+			for (; appliedSwitches < gVM.audioZoneSwitches.size(); appliedSwitches++) {
+				const auto &sw = gVM.audioZoneSwitches[appliedSwitches];
+				for (auto &z : gAuZones) if (!_stricmp(z.name.c_str(), sw.first.c_str())) z.active = sw.second;
+				fprintf(gLog, "script: audio zone %s switched %s at runtime%c", sw.first.c_str(), sw.second ? "on" : "off", 10);
+			}
+		}
+		else appliedSwitches = gVM.audioZoneSwitches.size();
+	}
 	UpdateAmbience();
 	AmbienceService();
 	UpdateRadio();
