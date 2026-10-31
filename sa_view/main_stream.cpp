@@ -1370,6 +1370,13 @@ static const int16_t kPainLut[22][3][2] = {
 	{{79, 86}, {-1, -1}, {-1, -1}}, {{87, 100}, {-1, -1}, {-1, -1}}, {{101, 121}, {-1, -1}, {-1, -1}}, {{122, 127}, {-1, -1}, {-1, -1}}, {{128, 133}, {-1, -1}, {-1, -1}}, {{134, 143}, {-1, -1}, {-1, -1}},
 	{{144, 155}, {-1, -1}, {-1, -1}}, {{156, 162}, {-1, -1}, {-1, -1}}, {{163, 168}, {-1, -1}, {-1, -1}}, {{-1, -1}, {0, 24}, {0, 6}}, {{-1, -1}, {25, 35}, {7, 18}}, {{-1, -1}, {36, 45}, {19, 35}},
 	{{-1, -1}, {46, 87}, {36, 68}}, {{-1, -1}, {88, 102}, {69, 83}}, {{-1, -1}, {103, 119}, {84, 94}}, {{-1, -1}, {120, 130}, {95, 100}}};
+extern double gNow;
+struct PendingSpeech { double at; int model, row; float pos[3]; };
+std::vector<PendingSpeech> gPendingSpeech;   // delayed say events (the die task speaks after the damage response)
+void PedSayPain(int pedModel, int row, const float pos[3]);
+void UpdatePendingSpeech() {
+	for (size_t i = 0; i < gPendingSpeech.size();) { if (gNow >= gPendingSpeech[i].at) { PendingSpeech ps = gPendingSpeech[i]; gPendingSpeech.erase(gPendingSpeech.begin() + i); PedSayPain(ps.model, ps.row, ps.pos); } else i++; }
+}
 void PedSayPain(int pedModel, int row, const float pos[3]) {
 	static const int kBank[3] = {144, 145, 146};
 	static SfxBank banks[3];
@@ -2877,7 +2884,7 @@ void UpdateAmbientPeds(float dt) {
 					gPhys.applyMoveForce(f); gPhys.applyTurnForce(f, rel);
 					fprintf(gLog, "car-ped hit: impulse %.1f car speed %.1f km/h\n", imp, gPhys.forwardSpeed() * 50.0f * 3.6f);
 					{ vp::V3 dn = vp::norm({-n.x, -n.y, 0.0f}); float bp[3] = {gPhys.pos.x + dn.x * 0.35f, gPhys.pos.y + dn.y * 0.35f, gPhys.pos.z + 0.6f}, bd[3] = {dn.x / 100.0f, dn.y / 100.0f, 0.0f}; FxAddBlood(bp, bd, 16); }   // CVehicle::ProcessEntityCollision run-over branch (Vehicle.cpp:3888)
-					{ float sp3[3] = {p.pos.x, p.pos.y, p.pos.z}; PedSayPain(p.model, 18, sp3); }   // CTX_GLOBAL_PAIN_HIGH of the damage response
+					{ float sp3[3] = {p.pos.x, p.pos.y, p.pos.z}; PedSayPain(p.model, 18, sp3); gPendingSpeech.push_back({gNow + 0.4, p.model, 16, {sp3[0], sp3[1], sp3[2]}}); }   // CTX_GLOBAL_PAIN_HIGH of the damage response
 					gone = true;
 				}
 			}
@@ -4243,6 +4250,7 @@ void Idle(float dt) {
 	UpdateHorn(dt);
 	UpdateDoorSounds(dt);
 	UpdateWeaponSound(dt);
+	UpdatePendingSpeech();
 	UpdateAmbience();
 	AmbienceService();
 	UpdateRadio();
