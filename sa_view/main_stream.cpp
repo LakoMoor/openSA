@@ -1359,6 +1359,44 @@ void UpdateWeaponSound(float dt) {
 	PlaySfx(bank.sounds[6], 0.9f, 1.0f);
 }
 
+// Pedestrian pain speech, first slice of CAEPedSpeechAudioEntity (step 6). Pain table gPainSpeechLookup read from the exe at 0x8C64B8 (22 contexts x 3 voices x {first, last} int16, -1 = none; rows 0-14 CJ,
+// 15-21 ped; verified against the gta-reversed LUT), voice -> bank {PAIN_A_CARL 144, PAIN_A_FEMALE 145, PAIN_A_MALE 146} read at 0x8C64AC. Global context -> specific context for pain (gta-reversed
+// gSpeechContextLookup, values coincide with the pain rows): PAIN_HIGH = row 18 (ped generic), PAIN_LOW = row 18, PAIN_DEATH_HIGH = row 16, PAIN_DEATH_LOW = row 17. The sound is a random one of the context's
+// range that is not in the 20 most recent phrases (GetSoundAndBankIDs, least recently used when all were). Column <-> voice order CARL, FEMALE, MALE is assumed from the enum (the LUT comment says CARL, MALE, FEMALE):
+// bank 146 has 101 sounds = the last column's range 0..100, so the order is confirmed for MALE. DEVIATIONS: no ped speech slots / probabilities / repeat times / CanWePlayGlobalSpeechContext, the call sites are only the car run-over (original: damage response
+// and the die task), speech volume flat 0.9 with a quadratic distance fall-off instead of the 3D emitter, no mouth / lip sync.
+static const int16_t kPainLut[22][3][2] = {
+	{{0, 13}, {-1, -1}, {-1, -1}}, {{14, 24}, {-1, -1}, {-1, -1}}, {{25, 33}, {-1, -1}, {-1, -1}}, {{34, 39}, {-1, -1}, {-1, -1}}, {{40, 63}, {-1, -1}, {-1, -1}}, {{64, 78}, {-1, -1}, {-1, -1}},
+	{{79, 86}, {-1, -1}, {-1, -1}}, {{87, 100}, {-1, -1}, {-1, -1}}, {{101, 121}, {-1, -1}, {-1, -1}}, {{122, 127}, {-1, -1}, {-1, -1}}, {{128, 133}, {-1, -1}, {-1, -1}}, {{134, 143}, {-1, -1}, {-1, -1}},
+	{{144, 155}, {-1, -1}, {-1, -1}}, {{156, 162}, {-1, -1}, {-1, -1}}, {{163, 168}, {-1, -1}, {-1, -1}}, {{-1, -1}, {0, 24}, {0, 6}}, {{-1, -1}, {25, 35}, {7, 18}}, {{-1, -1}, {36, 45}, {19, 35}},
+	{{-1, -1}, {46, 87}, {36, 68}}, {{-1, -1}, {88, 102}, {69, 83}}, {{-1, -1}, {103, 119}, {84, 94}}, {{-1, -1}, {120, 130}, {95, 100}}};
+void PedSayPain(int pedModel, int row, const float pos[3]) {
+	static const int kBank[3] = {144, 145, 146};
+	static SfxBank banks[3];
+	static bool loaded[3] = {};
+	static int memBank[20], memSound[20], memInit = 0;
+	if (!memInit) { memInit = 1; for (int i = 0; i < 20; i++) memBank[i] = memSound[i] = -1; }
+	if (getenv("SA_MUTE")) return;
+	const sa::PedDef *pd = gW.ide.FindPed(pedModel);
+	int voice = pd && (pd->pedType == "CIVFEMALE" || pd->pedType == "PROSTITUTE") ? 1 : 2;
+	const int16_t *r = kPainLut[row][voice];
+	if (r[0] < 0) return;
+	if (!loaded[voice]) { loaded[voice] = true; gSfx.loadBank(kBank[voice], banks[voice]); fprintf(gLog, "speech: pain bank %d has %zu sounds (table range up to %d)\n", kBank[voice], banks[voice].sounds.size(), 0); }
+	int n = r[1] - r[0] + 1, off = rand() % n, pick = -1, worst = -1;
+	for (int i = 0; i < std::min(20, n); i++) {
+		int snd = r[0] + (off + i) % n, idx = -1;
+		for (int k = 0; k < 20; k++) if (memBank[k] == kBank[voice] && memSound[k] == snd) { idx = k; break; }
+		if (idx == -1) { pick = snd; break; }
+		if (worst < idx) { pick = snd; worst = idx; }
+	}
+	for (int k = 19; k > 0; k--) { memBank[k] = memBank[k - 1]; memSound[k] = memSound[k - 1]; }
+	memBank[0] = kBank[voice]; memSound[0] = pick;
+	if (pick < 0 || pick >= (int)banks[voice].sounds.size()) { fprintf(gLog, "speech: pain sound %d outside bank %d (%zu sounds)\n", pick, kBank[voice], banks[voice].sounds.size()); return; }
+	float dx = pos[0] - camPos.x, dy = pos[1] - camPos.y, d = std::sqrt(dx * dx + dy * dy), g = std::max(0.0f, 1.0f - d / 40.0f);
+	fprintf(gLog, "speech: ped model %d %s pain row %d bank %d sound %d (%.1f m)\n", pedModel, voice == 1 ? "female" : "male", row, kBank[voice], pick, d);
+	PlaySfx(banks[voice].sounds[pick], 0.9f * g * g, 1.0f);
+}
+
 // Door sounds (CAEVehicleAudioEntity::ProcessAudioEvent, gta-reversed AEVehicleAudioEntity.cpp:550-600): bank GENRL_VEHICLE_GEN (138); open = LIGHT 0x27 / OLD 0x29 / NEW 0x28 (unset too) /
 // TRUCK 0x2B / VAN 0x2A, close = 0x20 / 0x22 / 0x21 / 0x24 / 0x23 by the model's DoorType (DoorTable.inc from the gta-reversed VehicleAudioSettings table, order model id 400..631, not re-read in the
 // exe). DEVIATIONS: played once on entering (open, then close 0.9 s later) and once on leaving (open, close 0.9 s later) at the player's F press, not per real door animation event; flat
@@ -2839,6 +2877,7 @@ void UpdateAmbientPeds(float dt) {
 					gPhys.applyMoveForce(f); gPhys.applyTurnForce(f, rel);
 					fprintf(gLog, "car-ped hit: impulse %.1f car speed %.1f km/h\n", imp, gPhys.forwardSpeed() * 50.0f * 3.6f);
 					{ vp::V3 dn = vp::norm({-n.x, -n.y, 0.0f}); float bp[3] = {gPhys.pos.x + dn.x * 0.35f, gPhys.pos.y + dn.y * 0.35f, gPhys.pos.z + 0.6f}, bd[3] = {dn.x / 100.0f, dn.y / 100.0f, 0.0f}; FxAddBlood(bp, bd, 16); }   // CVehicle::ProcessEntityCollision run-over branch (Vehicle.cpp:3888)
+					{ float sp3[3] = {p.pos.x, p.pos.y, p.pos.z}; PedSayPain(p.model, 18, sp3); }   // CTX_GLOBAL_PAIN_HIGH of the damage response
 					gone = true;
 				}
 			}
