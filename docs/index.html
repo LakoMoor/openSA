@@ -142,9 +142,10 @@
     <div class="card"><h3><span class="tag">Done</span>Request / load / remove</h3><p>A synchronous streamer: requesting a model also requests its TXD and parents, resources are read from the archives and released again when the last instance goes away.</p></div>
     <div class="card"><h3><span class="tag">Done</span>Streamed world viewer</h3><p><code>sa_stream</code> flies a free camera over the whole map. Models and textures are pulled in around the camera, LOD stand-ins appear at a distance, and everything is dropped again behind you.</p></div>
     <div class="card"><h3><span class="tag wip">Partial</span>Vehicles</h3><p>Body paint from <code>carcols.dat</code>, wheels attached to the wheel dummies, damage parts hidden. The stock wheel for each car and the right-hand wheel orientation are not yet checked against the executable.</p></div>
-    <div class="card"><h3><span class="tag wip">Partial</span>Visibility rules</h3><p>Draw distance and LOD switching use a heuristic. Replacing it with the real <code>CRenderer</code> logic is the current work item.</p></div>
-    <div class="card"><h3><span class="tag todo">Todo</span>Time of day &amp; weather</h3><p>Fixed noon, no <code>timecyc</code>, no fog, no vehicle reflections yet.</p></div>
-    <div class="card"><h3><span class="tag todo">Todo</span>Gameplay</h3><p>Collision, peds, traffic, scripts, audio. The roadmap is long; the goal is behaviour identical to the original.</p></div>
+    <div class="card"><h3><span class="tag wip">Partial</span>Time of day &amp; weather</h3><p><code>timecyc</code> colours, sun, moon, clouds and water waves are ported; rain, fog and wind are partly there.</p></div>
+    <div class="card"><h3><span class="tag wip">Partial</span>Driving &amp; damage</h3><p>CAutomobile-style handling from <code>handling.cfg</code>, wheel dust and tyre smoke by surface, panel damage and swinging doors (log-verified).</p></div>
+    <div class="card"><h3><span class="tag wip">Partial</span>CJ &amp; script</h3><p>Walking CJ with his starting outfit composed over the skin, <code>main.scm</code> running in a script VM, pain speech and footsteps. Missions are not reachable yet.</p></div>
+    <div class="card"><h3><span class="tag todo">Todo</span>Gameplay</h3><p>Weapons, mission state, boats, full audio mix. The goal is behaviour identical to the original; <code>PLAN.md</code> lists every open item.</p></div>
   </div>
 </section>
 
@@ -155,6 +156,8 @@
     <figure><img src="assets/shot-streaming-ls.jpg" alt="Los Santos streets with distant buildings" loading="lazy"><figcaption>Los Santos near Grove Street, streamed around the camera with LOD buildings in the distance.</figcaption></figure>
     <figure><img src="assets/shot-downtown.jpg" alt="Downtown Los Santos from a freeway" loading="lazy"><figcaption>Downtown, reached by flying across the map &mdash; everything loaded on the way.</figcaption></figure>
     <figure><img src="assets/shot-infernus.jpg" alt="Infernus with wheels" loading="lazy"><figcaption>Vehicle viewer: Infernus with palette paint and wheels.</figcaption></figure>
+    <figure><img src="assets/shot-cj.jpg" alt="CJ in his starting outfit above Grove Street" loading="lazy"><figcaption>CJ with the starting outfit: vest, jeans and sneakers layered over the skin textures the way <code>ConstructTextures</code> does it.</figcaption></figure>
+    <figure><img src="assets/shot-crash.jpg" alt="A wrecked car on its roof" loading="lazy"><figcaption>Driving physics and crash handling: the car flipped by a wall hit (damage parts and swinging doors run in this build).</figcaption></figure>
     <figure><img src="assets/shot-cheetah.jpg" alt="Cheetah in dark blue" loading="lazy"><figcaption>Cheetah painted from <code>carcols.dat</code> (palette entry 20).</figcaption></figure>
   </div>
 </section>
