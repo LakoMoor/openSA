@@ -9,6 +9,7 @@
 #include <d3d9.h>
 namespace rw { namespace d3d { extern IDirect3DDevice9 *d3ddevice; } }
 #include <algorithm>
+#include <set>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -1837,8 +1838,11 @@ void UpdateFootsteps(float dt) {
 	} else PlaySfx(gFeetBank.sounds[1 + (rng >> 8) % 5], 0.8f);
 }
 
+float gCarYaw = 0.0f;   // heading of the driven car as camYaw convention (radians), for the SA_CAMYAW test aid
+bool gCarYawValid = false;
 void UpdateCamera() {
 	float yr = camYaw * 3.14159265f / 180.0f, pr = camPitch * 3.14159265f / 180.0f;
+	if (const char *cy = getenv("SA_CAMYAW")) if (gDriveGen >= 0 && gCarYawValid) yr = gCarYaw + (float)atof(cy) * 3.14159265f / 180.0f;   // test aid: camera yaw relative to the driven car (deg)
 	rw::V3d dir = {std::sin(yr) * std::cos(pr), std::cos(yr) * std::cos(pr), std::sin(pr)};
 	rw::V3d up = {0.0f, 0.0f, 1.0f};
 	rw::Frame *f = gCamera->getFrame();
@@ -2193,11 +2197,12 @@ bool gExhaustOk = false, gEngineOk = false;
 struct { bool on = false; float pos[3] = {}, t = 0.0f; } gOverheat;
 FxEmitterSim *FxSimFor(const std::string &name, bool emitting);
 void UpdateOverheat() {
+	gCarYaw = std::atan2(gPhys.fwd.x, gPhys.fwd.y); gCarYawValid = gPhysActive;
 	gOverheat.on = false;
 	if (!gPhysActive || !gEngineOk || gDriveGen < 0) return;
 	if (gPhys.health >= 650.0f || gPhys.health < 250.0f || gPhys.drowning) return;
 	gOverheat.on = true;
-	FxSimFor("overheat_car", true);   // creates the system on first use
+	FxSimFor("overheat_car#0", true); FxSimFor("overheat_car#1", true);   // WhiteSmoke + BlackSmoke primitives, created on first use
 	gOverheat.t = 1.0f - (gPhys.health - 250.0f) / 400.0f;
 	gOverheat.pos[0] = gPhys.pos.x + gPhys.right.x * gEngineDummy.x + gPhys.fwd.x * gEngineDummy.y + gPhys.up.x * gEngineDummy.z;
 	gOverheat.pos[1] = gPhys.pos.y + gPhys.right.y * gEngineDummy.x + gPhys.fwd.y * gEngineDummy.y + gPhys.up.y * gEngineDummy.z;
@@ -3691,9 +3696,12 @@ FxEmitterSim *FxSimFor(const std::string &name, bool emitting) {
 	FxEnsure();
 	auto it = gFx.sims.find(name);
 	if (it != gFx.sims.end()) return it->second;
-	const FxSystem *fs = gFx.proj.find(name);
+	// "name#N" selects the N-th primitive of a multi-primitive system (each primitive is simulated and drawn by its own FxEmitterSim)
+	size_t pi = 0; std::string base = name; auto hash = name.find('#');
+	if (hash != std::string::npos) { pi = (size_t)atoi(name.c_str() + hash + 1); base = name.substr(0, hash); }
+	const FxSystem *fs = gFx.proj.find(base);
 	FxEmitterSim *sm = nullptr;
-	if (fs && !fs->prims.empty()) { sm = new FxEmitterSim(fs->prims[0], *fs); sm->emitting = emitting; }
+	if (fs && pi < fs->prims.size()) { sm = new FxEmitterSim(fs->prims[pi], *fs); sm->emitting = emitting; }
 	gFx.sims[name] = sm;
 	return sm;
 }
@@ -3826,6 +3834,10 @@ void DrawFxSim(const FxPrim &prim, const std::vector<FxBillboard> &bb) {
 		}
 		if (sv.empty()) continue;
 		rw::Texture *t = findTex(prim.base.count(texKeys[pass]) ? prim.base.at(texKeys[pass]) : "NULL");
+		if (t && t->raster && getenv("SA_GENDBG")) { static std::set<std::string> seen; if (seen.insert(t->name).second) {
+			rw::Raster *r = t->raster; uint8_t *px = r->lock(0, rw::Raster::LOCKREAD);
+			if (px) { int w = r->width, h = r->height, bpp = r->depth / 8; long sum = 0; int mx = 0; for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) { int al = px[(y * w + x) * bpp + (bpp == 4 ? 3 : 0)]; sum += al; mx = std::max(mx, al); }
+				fprintf(gLog, "fx texture %s: %dx%d depth %d format 0x%x mean byte3 %.1f max %d%c", t->name, w, h, r->depth, r->format, (double)sum / (w * h), mx, 10); r->unlock(0); } else fprintf(gLog, "fx texture %s: lock failed%c", t->name, 10); } }
 		rw::SetRenderStatePtr(rw::TEXTURERASTER, t ? t->raster : nil);
 		rw::im3d::Transform(sv.data(), (rw::int32)sv.size(), nil, rw::im3d::EVERYTHING);
 		rw::im3d::RenderIndexedPrimitive(rw::PRIMTYPETRILIST, si.data(), (rw::int32)si.size());
@@ -3864,14 +3876,16 @@ void DrawFxAll(float dt) {
 		if (!sm) continue;
 		float o0[3] = {0, 0, 0};
 		const float *o = sm == testSim ? org : o0;
-		if (kv.first == "overheat_car") { sm->emitting = gOverheat.on; if (gOverheat.on) { sm->time = gOverheat.t; o = gOverheat.pos; if (getenv("SA_FXSIZE")) sm->defMult.size = (float)atof(getenv("SA_FXSIZE")); if (getenv("SA_FXALPHA")) sm->defMult.a = (float)atof(getenv("SA_FXALPHA")); } }
+		if (kv.first.compare(0, 13, "overheat_car#") == 0 || kv.first == "overheat_car") { sm->emitting = gOverheat.on; if (gOverheat.on) { sm->time = gOverheat.t; o = gOverheat.pos; if (getenv("SA_FXSIZE")) sm->defMult.size = (float)atof(getenv("SA_FXSIZE")); if (getenv("SA_FXALPHA")) sm->defMult.a = (float)atof(getenv("SA_FXALPHA")); } }
 		sm->update(dt, o);
 		std::vector<FxBillboard> bb;
 		sm->collect(bb);
-		const FxSystem *fs = gFx.proj.find(kv.first);
+		size_t primIdx = 0; std::string sysName = kv.first;
+		if (size_t hh = sysName.find('#'); hh != std::string::npos) { primIdx = (size_t)atoi(sysName.c_str() + hh + 1); sysName = sysName.substr(0, hh); }
+		const FxSystem *fs = gFx.proj.find(sysName);
 		if (sm == testSim && !bb.empty()) { static float dl = 0; dl += dt; if (dl > 2.0f) { dl = 0; fprintf(gLog, "SA_FX first: pos %.1f %.1f %.1f half %.2f rgba %d %d %d %d tex %d cam %.1f %.1f %.1f\n", bb[0].pos[0], bb[0].pos[1], bb[0].pos[2], bb[0].halfX, bb[0].r, bb[0].g, bb[0].b, bb[0].a, bb[0].tex, camPos.x, camPos.y, camPos.z); } }
 		if (kv.first == "overheat_car" && !bb.empty() && getenv("SA_GENDBG")) { static int n = 0; if (n++ % 60 == 0) { const FxBillboard &b0 = bb[bb.size() / 2]; fprintf(gLog, "overheat bb: n %zu pos %.2f %.2f %.2f half %.2f rgba %d %d %d %d tex %d%c", bb.size(), b0.pos[0], b0.pos[1], b0.pos[2], b0.halfX, b0.r, b0.g, b0.b, b0.a, b0.tex, 10); } }
-		if (!bb.empty() && fs) DrawFxSim(fs->prims[0], bb);
+		if (!bb.empty() && fs && primIdx < fs->prims.size()) DrawFxSim(fs->prims[primIdx], bb);
 	}
 	{ static float lt = 0; lt += dt; if (lt > 2.0f && !gFx.sims.empty()) { lt = 0; for (auto &kv : gFx.sims) if (kv.second && kv.second->alive()) fprintf(gLog, "fx %s: %zu alive\n", kv.first.c_str(), kv.second->alive()); } }
 }
