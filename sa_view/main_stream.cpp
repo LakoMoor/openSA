@@ -1497,7 +1497,63 @@ void RadioChooseTracks(int st) {
 		}
 		return false;
 	};
-	auto queueDJ = [&]() { return false; };   // DEVIATION: DJ banter (0x4EA2D0: weather / time-of-day / script-state dependent lists) not ported
+	// DJ banter (ChooseDJBanterIndex 0x4EA2D0 + ChooseDJBanterIndexFromList 0x4E95E0, lists dumped from the exe at 0x8C8BF0..0x8C8F50). Special-banter script state (0xB62C73) is always 0
+	// here (no scripts), so the first pick is the station's single 'first' banter (0x8C8BF0) unless it is in the 15-entry history; then 60 %: weather / time-of-day lists, else the whole range.
+	// Weather test = CWeather::WillWeatherBe(type, 3) 0x72A590: current forecast slot and the next 3 equal to the type in the current region.
+	static const int kBanterFirst[12] = {1922, 185, 315, 470, 767, 946, 1061, 1213, 1360, 1490, 1651, 1922};
+	static const int kBanterAll[12][2] = {{0,38},{188,205},{318,339},{473,484},{770,802},{949,971},{1064,1081},{1216,1230},{1363,1376},{1493,1514},{1654,1680},{1922,1922}};
+	static const int kBanterEve[12][2] = {{1922,1922},{206,207},{1922,1922},{488,489},{805,806},{972,974},{1086,1087},{1235,1236},{1380,1380},{1519,1520},{1686,1687},{1922,1922}};
+	static const int kBanterMorn[12][2] = {{1922,1922},{208,209},{345,346},{490,492},{807,809},{975,977},{1088,1089},{1237,1238},{1381,1382},{1521,1522},{1688,1689},{1922,1922}};
+	static const int kBanterNight[12][2] = {{39,59},{210,211},{347,348},{493,495},{810,811},{978,980},{1090,1091},{1239,1240},{1383,1384},{1523,1524},{1690,1691},{1922,1922}};
+	static const int kBanterRain[12][2] = {{1922,1922},{215,217},{351,353},{498,499},{815,816},{1922,1922},{1094,1097},{1243,1245},{1387,1388},{1527,1529},{1695,1696},{1922,1922}};
+	static const int kBanterClearNight[12][2] = {{1922,1922},{218,219},{354,355},{500,501},{817,818},{1922,1922},{1098,1099},{1246,1247},{1389,1390},{1530,1531},{1697,1697},{1922,1922}};
+	static const int kBanterFog[12][2] = {{1922,1922},{212,214},{349,350},{496,497},{812,814},{1922,1922},{1092,1093},{1241,1242},{1385,1386},{1525,1526},{1692,1694},{1922,1922}};
+	static std::vector<int> banterHist[13];
+	auto willWeatherBe = [&](int type) {
+		for (int i = 0; i <= 3; i++) if ((int)kForecast[gWeatherRegion][(gForecastIdx + i) & 63] == type) return true;
+		return false;
+	};
+	auto banterRecent = [&](int id) { return std::find(banterHist[st].begin(), banterHist[st].end(), id) != banterHist[st].end(); };
+	auto fromList = [&](const int (*list)[2]) {
+		int lo = list[st][0], hi = list[st][1];
+		if (lo == 1922) return -1;
+		int n = hi - lo + 1, start = rand() % n, win = std::min(15, kBanterAll[st][1] - kBanterAll[st][0] - 1);
+		for (int i = 0; i < n; i++) {
+			int cand = lo + (start + i) % n;
+			size_t from = banterHist[st].size() > (size_t)win ? banterHist[st].size() - (size_t)win : 0;
+			if (std::find(banterHist[st].begin() + from, banterHist[st].end(), cand) == banterHist[st].end()) return cand;
+		}
+		return -1;
+	};
+	auto chooseBanter = [&]() {
+		int id = kBanterFirst[st];
+		if (id == 1922 || banterRecent(id)) id = -1;
+		if (id >= 0) return id;
+		if (st == 0) return fromList(kBanterAll);   // emergency AA: 0x441C10 (night test, game time) picks the night list 0x8C8E30 else the whole range
+		if (!RadioChance(0.6f)) return -1;
+		int hour = ((int)(gGameMinutes / 60.0f)) % 24;
+		bool rain = willWeatherBe(16) || willWeatherBe(8);
+		bool clear = willWeatherBe(0) || willWeatherBe(2) || willWeatherBe(13) || willWeatherBe(6) || willWeatherBe(11) || willWeatherBe(17);
+		int r = -1;
+		if (rain) { if (RadioChance(0.5f)) r = fromList(kBanterRain); }
+		else if (clear && hour < 6) { if (RadioChance(0.5f)) r = fromList(kBanterClearNight); }
+		else if (willWeatherBe(9)) { if (RadioChance(0.5f)) r = fromList(kBanterFog); }
+		if (r >= 0) return r;
+		if (hour >= 6 && hour < 9) { if (RadioChance(0.3f)) r = fromList(kBanterMorn); }
+		else if (hour >= 18 && hour < 21) { if (RadioChance(0.3f)) r = fromList(kBanterEve); }
+		else if (hour >= 22 || hour < 3) { if (RadioChance(0.3f)) r = fromList(kBanterNight); }
+		if (r >= 0) return r;
+		return fromList(kBanterAll);
+	};
+	auto queueDJ = [&]() {
+		int id = chooseBanter();
+		if (id < 0) return false;
+		banterHist[st].push_back(id);   // the exe's history helper 0x4E97B0 keeps 15 entries, newest first
+		if (banterHist[st].size() > 15) banterHist[st].erase(banterHist[st].begin());
+		gRadioQueue.push_back((size_t)id);
+		fprintf(gLog, "radio: DJ banter %d on station %d\n", id, st);
+		return true;
+	};   // DEVIATIONS: script-driven special banter states (0xB62C73) not ported; the 0x441C10 night test for station 0 and the 0xB72914 gate are assumed (night / false); window keeps the last N entries of a 15-entry history
 	if (!RadioChance(0.95f)) {
 		if (RadioChance(0.5f)) queueIdent();
 		if (!queueDJ()) queueAdvert();

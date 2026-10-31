@@ -28,7 +28,7 @@ Steps 5-12 are each a subsystem of weeks of work in the original; they are not e
 A step is only marked `done` when every box is ticked with in-game evidence (log line or screenshot). Status as of 2026-10-30:
 
 - Step 5 (vehicle audio): [x] engine loop plays while driving (log) / [x] horn on H (log) / [ ] doors / [ ] heard by a human / [ ] per-model tables re-read in the exe.
-- Step 6 (audio): [x] weapon shot on X (log only) / [x] radio decode + station queue from the exe tables (log only) / [ ] DJ banter / [ ] speech / [ ] ambience / [ ] heard by a human.
+- Step 6 (audio): [x] weapon shot on X (log only) / [x] radio decode + station queue from the exe tables (log only) / [x] DJ banter (ChooseDJBanterIndex 0x4EA2D0 + FromList 0x4E95E0 lists dumped from the exe; weather via WillWeatherBe 0x72A590; log-verified; deviation: script-driven special banter states, 0x441C10 night test and 0xB72914 gate assumed) / [ ] speech / [ ] ambience / [ ] heard by a human.
 - Step 7 (water): [x] wave grid / [ ] foam / [ ] flow shading / [ ] visual comparison with the original.
 - Step 8 (particles): [x] rain splash placement + prt_splash parameters / [x] sandstorm spawn rule + prt_sand2 parameters / [ ] splash, sandstorm and wake visible on a screenshot / [x] blend-id mapping (FxEmitterBP g_BlendFunctions) / [ ] generic fx system loader (emitters, forces, LOD).
 - Step 9 (CJ clothes): [x] starting outfit on screenshot / [ ] clothes builder texture merge / [ ] shop outfits.
