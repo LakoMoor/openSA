@@ -3751,6 +3751,7 @@ void FxExhaust(float ticks, float gas, bool wet) {
 		if (fwdSpeed >= 0.05f) { v[0] = gPhys.moveSpeed.x * 30.0f; v[1] = gPhys.moveSpeed.y * 30.0f; v[2] = gPhys.moveSpeed.z * 30.0f; }
 		else { v[0] = backSpeed * gPhys.fwd.x; v[1] = backSpeed * gPhys.fwd.y; v[2] = backSpeed * gPhys.fwd.z; }
 		FxMult m; m.r = 0.9f; m.g = 0.9f; m.b = 1.0f; m.a = std::max(0.25f - ms, 0.0f); m.size = 0.2f; m.rot = 1.0f; m.life = std::max(0.2f - ms, 0.0f);
+		if (getenv("SA_FXSIZE")) m.size = (float)atof(getenv("SA_FXSIZE")); if (getenv("SA_FXALPHA")) m.a = (float)atof(getenv("SA_FXALPHA"));   // test aids
 		int n = (gDriveHandling && (gDriveHandling->modelFlags & 0x2000u)) ? 2 : 1;
 		for (int e = 0; e < n; e++) {
 			float lx = e ? -gExhaust.x : gExhaust.x;
