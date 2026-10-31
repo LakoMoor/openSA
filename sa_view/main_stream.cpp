@@ -2246,7 +2246,9 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 	in.steer = (kA ? 1.0f : 0.0f) - (kD ? 1.0f : 0.0f);
 	auto ground = [&](float x, float y, float zFrom, float zTo, vp::GroundHit &out) {
 		float z, zx, zy;
-		if (!GroundHeight(x, y, zFrom, std::max(0.1f, zFrom - zTo), z)) return false;
+		// no surface below the wheel probe: the wheel may have sunk just below the surface (spawn slightly low, pushed in by a collision), where the probe would otherwise find nothing and the car would fall
+		// through the world. Retry from 1 m higher (a hit is then the surface the wheel is sunk into). DEVIATION: the original suspension lines run along the car axis and do not have this failure mode.
+		if (!GroundHeight(x, y, zFrom, std::max(0.1f, zFrom - zTo), z) && !GroundHeight(x, y, zFrom + 1.0f, std::max(0.1f, zFrom + 1.0f - zTo), z)) return false;
 			int mat = gGroundMaterial;
 		if (!GroundHeight(x + 0.3f, y, z + 0.5f, 1.0f, zx)) zx = z;
 		if (!GroundHeight(x, y + 0.3f, z + 0.5f, 1.0f, zy)) zy = z;
