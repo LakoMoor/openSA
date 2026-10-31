@@ -4005,6 +4005,7 @@ void FxWheelDust(float ticks, float gas) {
 					m.life = 0.5f + 0.5f * rnd();
 					float p[3] = {w.x, w.y, gz};
 					ss->addParticle(p, v, m);
+					{ static int logged = 0; if (logged++ < 2) fprintf(gLog, "fx: wheel spin smoke surface %d wheel %d spin %.2f vel %.2f %.2f %.2f\n", mat, i, sp, v[0], v[1], v[2]); }
 				}
 			}
 			if (fx & 7) {   // grass / gravel / mud: prt_wheeldirt, three particles
