@@ -110,8 +110,17 @@ struct Inst {
 	int lod = -1;
 };
 
+// AUZO line (CFileLoader::LoadAudioZone 0x5B4D70): name, id, flags (1 = active), box min/max or sphere centre + radius
+struct AudioZone {
+	std::string name;
+	int id = 0;
+	bool active = false, box = false;
+	float a[3] = {}, b[3] = {}, radius = 0.0f;
+};
+
 struct IplText {
 	std::vector<Inst> insts;
+	std::vector<AudioZone> auzos;
 	std::unordered_map<std::string, int> sections;
 	int badLines = 0;
 };

@@ -73,6 +73,7 @@ sa::TimecycKey gTc;
 std::string gameDir;
 float centerX = 2495.0f, centerY = -1690.0f, loadRadius = 1000.0f; // cap on any model's draw distance
 rw::V3d camPos;
+std::vector<sa::AudioZone> gAuZones;
 int gDriveGen = -1; // index into gCarGens of the car the player drives, -1 = on foot
 float gCarPitch = 0.0f, gCarRoll = 0.0f; // radians, terrain attitude of the driven car
 float gCarHeading = 0.0f, gCarSpeed = 0.0f; // radians (counter-clockwise, like the generator angle), m/s along the car's forward axis
@@ -396,6 +397,7 @@ void CollectPlacements() {
 		std::string path = Lower(d.arg), name = path.substr(path.find_last_of("\\/") + 1);
 		name = name.substr(0, name.rfind('.'));
 		std::vector<int> &map = localToGlobal[name];
+		gAuZones.insert(gAuZones.end(), ipl.auzos.begin(), ipl.auzos.end());
 		for (auto &i : ipl.insts) {
 			int g = add(i.id, i.pos[0], i.pos[1], i.pos[2], i.rot, (uint32_t)i.interior);
 			map.push_back(g);
@@ -1608,6 +1610,40 @@ bool RadioNextTrack() {
 	return false;
 }
 
+// CAudioZones::Update (0x508340) + the zone -> track switch of CAEAmbienceTrackManager::UpdateAmbienceTrackAndVolume (0x4D6E60, table read from gta-reversed): the first active sphere
+// (else box) containing the camera picks an AMBIENCE-pack track (ids 135..174). Re-evaluated every 16th frame or after 20 m like the original.
+// DEVIATIONS: only the track choice is logged (no second audio channel / fade / volume yet); sandstorm, special-mission tracks, indoor/underwater handling (166/174) and the radio-station zones
+// (30, 52..62) are not ported.
+void UpdateAmbience() {
+	static int frame = 0;
+	static float lx = 1e9f, ly = 0.0f, lz = 0.0f;
+	static int cur = -2;
+	rw::V3d camPos = ::camPos;   // test aid SA_AMBPOS="x y z": evaluate the zones at that point instead of the camera
+	if (const char *t = getenv("SA_AMBPOS")) sscanf(t, "%f %f %f", &camPos.x, &camPos.y, &camPos.z);
+	float dx = camPos.x - lx, dy = camPos.y - ly, dz = camPos.z - lz;
+	if ((frame++ % 16) != 6 && dx * dx + dy * dy + dz * dz < 400.0f) return;
+	lx = camPos.x; ly = camPos.y; lz = camPos.z;
+	const sa::AudioZone *sph = nullptr, *box = nullptr;
+	for (auto &z : gAuZones) {
+		if (!z.active) continue;
+		if (!z.box && !sph) {
+			float ex = camPos.x - z.a[0], ey = camPos.y - z.a[1], ez = camPos.z - z.a[2];
+			if (ex * ex + ey * ey + ez * ez <= z.radius * z.radius) sph = &z;
+		} else if (z.box && !box) {
+			if (camPos.x >= z.a[0] && camPos.x <= z.b[0] && camPos.y >= z.a[1] && camPos.y <= z.b[1] && camPos.z >= z.a[2] && camPos.z <= z.b[2]) box = &z;
+		}
+	}
+	const sa::AudioZone *az = sph ? sph : box;
+	static const struct { int zone, track; } kMap[] = {{4,143},{5,140},{8,165},{10,139},{12,168},{13,157},{15,164},{17,146},{19,138},{20,136},{21,135},{23,148},{24,159},{25,158},{26,154},{28,147},{29,147},
+		{34,162},{36,155},{37,144},{39,163},{41,169},{44,152},{48,137},{50,173},{51,156},{64,151},{66,170},{67,171}};
+	int track = -1;
+	if (az) for (auto &m : kMap) if (m.zone == az->id) track = m.track;
+	if (track != cur) {
+		cur = track;
+		fprintf(gLog, "ambience: zone %s (id %d) -> track %d%c", az ? az->name.c_str() : "-", az ? az->id : -1, track, 10);
+	}
+}
+
 void UpdateRadio() {
 	RadioPlayer &r = gRadio;
 	if (getenv("SA_MUTE")) return;
@@ -1632,6 +1668,7 @@ void UpdateRadio() {
 					for (size_t id : gRadioQueue) line += " " + std::to_string(id) + "(" + r.table.packs[r.table.tracks[id].pack] + ")";
 					fprintf(gLog, "%s%c", line.c_str(), 10);
 				}
+				if (getenv("SA_AMBSIM")) for (int id = 130; id <= 175; id++) fprintf(gLog, "amb track %d pack %s size %u%c", id, r.table.packs[r.table.tracks[id].pack].c_str(), r.table.tracks[id].size, 10);
 				gRadioQueue.clear(); r.cur = -1;
 			}
 		}
@@ -3896,6 +3933,7 @@ void Idle(float dt) {
 	UpdateHorn(dt);
 	UpdateDoorSounds(dt);
 	UpdateWeaponSound(dt);
+	UpdateAmbience();
 	UpdateRadio();
 	UpdateEngine();
 	UpdateCars();

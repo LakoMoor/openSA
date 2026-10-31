@@ -216,6 +216,18 @@ bool LoadIplText(const std::string &path, IplText &out, bool &isBinary) {
 			for (int k = 0; k < 4; k++) i.rot[k] = (float)atof(t[6 + k].c_str());
 			if (t.size() == 11) i.lod = atoi(t[10].c_str());
 			out.insts.push_back(std::move(i));
+		} else if (section == "auzo") {
+			auto t = Fields(line);
+			if (t.size() != 9 && t.size() != 7) { out.badLines++; continue; }
+			AudioZone z;
+			z.name = t[0];
+			z.id = atoi(t[1].c_str());
+			z.active = atoi(t[2].c_str()) == 1;
+			z.box = t.size() == 9;
+			for (int k = 0; k < 3; k++) z.a[k] = (float)atof(t[3 + k].c_str());
+			if (z.box) for (int k = 0; k < 3; k++) z.b[k] = (float)atof(t[6 + k].c_str());
+			else z.radius = (float)atof(t[6].c_str());
+			out.auzos.push_back(std::move(z));
 		}
 	}
 	return true;
