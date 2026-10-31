@@ -3018,6 +3018,7 @@ void CarVsTraffic() {
 			float imp = gPhys.hitCar(other, {gPhys.fwd.x * 0.7f * a - nx, gPhys.fwd.y * 0.7f * a - ny, 0}, {other.fwd.x * 0.7f * b + nx, other.fwd.y * 0.7f * b + ny, 0}, {nx, ny, 0});
 			gPhys.pos.x += nx * (2.0f - d); gPhys.pos.y += ny * (2.0f - d);
 			if (imp > 0.0f) fprintf(gLog, "car-car hit: impulse %.1f loss %.1f health %.1f\n", imp, before - gPhys.health, gPhys.health);
+			if (imp > 0.0f && before - gPhys.health >= 5.0f && gDriveGen >= 0) DamageCarAtContact(gCarGens[gDriveGen].clump, vp::V3{gPhys.fwd.x * 0.7f * a - nx, gPhys.fwd.y * 0.7f * a - ny, 0}, gPhys.fwd);   // contact point as passed to hitCar
 			{ float wp[3] = {(gPhys.pos.x + o.pos.x) * 0.5f, (gPhys.pos.y + o.pos.y) * 0.5f, gPhys.pos.z + 0.5f}; CarCollisionFx(wp, imp); }   // only the player car runs it (the traffic car would run its own copy)
 		}
 	}
