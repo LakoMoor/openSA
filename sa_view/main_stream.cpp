@@ -1140,6 +1140,30 @@ bool AddPedPart(const std::vector<uint8_t> &dff, const std::vector<rw::TexDictio
 	return true;
 }
 
+// CClothesBuilder::ConstructTextures layers each clothing texture over the body skin with 0x5A57B0: every overlay pixel whose alpha byte is not 0 replaces the skin pixel
+// (ported exactly; rasters are read as 32 bit RGBA via the driver's rasterToImage). DEVIATIONS: original works on 128x256 style rasters it clones with 0x5A5730 and writes into the
+// clump's own texture; the three-way fat / muscle / stamina weighted blend (0x5A59C0, 0x5A5BC0) is not ported because the default body (fat 0, muscle 0) selects the base skin only;
+// differing sizes (not seen in the player txds) fall back to the overlay alone.
+rw::Texture *ComposeOverlay(rw::Texture *base, rw::Texture *over, const char *name) {
+	if (!base || !over || !base->raster || !over->raster) return over ? over : base;
+	rw::Image *a = base->raster->toImage(), *b = over->raster->toImage();
+	rw::Texture *out = nullptr;
+	if (a && b) {
+		a->convertTo32(); b->convertTo32();
+		if (a->width == b->width && a->height == b->height) {
+			for (int y = 0; y < a->height; y++) {
+				uint8_t *pa = a->pixels + y * a->stride, *pb = b->pixels + y * b->stride;
+				for (int x = 0; x < a->width; x++, pa += 4, pb += 4) if (pb[3]) { pa[0] = pb[0]; pa[1] = pb[1]; pa[2] = pb[2]; pa[3] = pb[3]; }
+			}
+			rw::Raster *r = rw::Raster::createFromImage(a);
+			if (r) { out = rw::Texture::create(r); if (out) { strncpy(out->name, name, 31); out->name[31] = 0; out->setFilter(rw::Texture::LINEARMIPLINEAR); } }
+		} else fprintf(gLog, "clothes: %s overlay size %dx%d differs from skin %dx%d\n", name, b->width, b->height, a->width, a->height);
+	}
+	if (a) a->destroy();
+	if (b) b->destroy();
+	return out ? out : over;
+}
+
 // CJ without clothes: the base body parts of player.img (an all-zero CPedClothesDesc selects model key 0 / texture key 0) with the
 // plain player_face / player_torso / player_legs / player_feet textures. DEVIATION: the outfit the original game starts with comes from
 // the script/save (GIVE_PLAYER_CLOTHES) and is merged into one geometry by CClothesBuilder; here every part is its own skinned clump.
@@ -1171,7 +1195,17 @@ bool LoadCj() {
 	if (txds.size() == 7) std::rotate(txds.begin(), txds.begin() + 4, txds.end()); // clothes txds first: jeansdenim.txd also has a texture called "legs"
 	for (size_t i = 0; i < 3; i++) { FORLIST(lnk, txds[i]->textures) fprintf(gLog, "clothes txd %zu texture %s\n", i, rw::Texture::fromDict(lnk)->name); }
 	// clothes models replace the base torso / legs / feet geometry (CClothesBuilder::ConstructGeometryArray); texture names assumed to be the item's own txd texture
-	struct { const char *dff, *tex; } parts[] = {{"head.dff", "face"}, {"hands.dff", "torso"}, {"vest.dff", "vest"}, {"jeans.dff", "legs"}, {"sneaker.dff", "sneakerbincblk"}};
+	// textures: clothes txds are txds[0..2] (vest, jeansdenim, sneakerbincblk), the base skins txds[3..6] (torso, face, legs, feet)
+	{
+		rw::TexDictionary *cd = rw::TexDictionary::create();
+		rw::TexDictionary::setCurrent(nil);
+		rw::Texture *torso = ComposeOverlay(txds[3]->find("torso"), txds[0]->find("vest"), "cj_torso");
+		rw::Texture *legs = ComposeOverlay(txds[5]->find("legs"), txds[1]->find("legs"), "cj_legs");
+		rw::Texture *feet = ComposeOverlay(txds[6]->find("foot"), txds[2]->find("sneakerbincblk"), "cj_feet");
+		for (rw::Texture *t : {torso, legs, feet}) if (t && strncmp(t->name, "cj_", 3) == 0) cd->add(t);   // fallbacks (overlay alone) stay in their own txd
+		txds.insert(txds.begin(), cd);
+	}
+	struct { const char *dff, *tex; } parts[] = {{"head.dff", "face"}, {"hands.dff", "cj_torso"}, {"vest.dff", "cj_torso"}, {"jeans.dff", "cj_legs"}, {"sneaker.dff", "cj_feet"}};
 	for (auto &pt : parts) {
 		std::vector<uint8_t> b;
 		if (!read(pt.dff, b) || !AddPedPart(b, txds, pt.dff, pt.tex)) ok = false;
