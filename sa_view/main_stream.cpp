@@ -1610,6 +1610,92 @@ bool RadioNextTrack() {
 	return false;
 }
 
+// Ambience playback (CAEAmbienceTrackManager::Service 0x4D76C0 states, simplified): own waveOut device + Ogg stream, the track loops; volume in dB follows UpdateAmbienceTrackAndVolume for the plain
+// zone case: a new track starts at -34 dB and rises 1 dB per frame up to -6 dB, a track being replaced fades out 0.4 dB per frame and stops under -40 dB.
+// DEVIATIONS: starts at the beginning (the original starts at a random time / resumes the previous position), a zone's distance attenuation (zones 5, 10: GetDistanceAttenuation) and the camera
+// height fade of zone 4 are not applied, no frequency factor, mono tracks are duplicated to both channels, no pause handling.
+int gAmbWant = -1;
+struct AmbiencePlayer {
+	TrackTable table;
+	bool tableOk = false, tried = false, streaming = false;
+	RadioStream stream;
+	HWAVEOUT h = nullptr;
+	int rate = 0, track = -1;
+	WAVEHDR hdr[4] = {};
+	std::vector<int16_t> buf[4];
+	bool primed[4] = {};
+	float vol = -100.0f;
+};
+AmbiencePlayer gAmb;
+
+void StopAmbienceDevice() {
+	AmbiencePlayer &a = gAmb;
+	a.stream.end(); a.streaming = false; a.track = -1;
+	if (!a.h) return;
+	waveOutReset(a.h);
+	for (int i = 0; i < 4; i++) if (a.primed[i]) waveOutUnprepareHeader(a.h, &a.hdr[i], sizeof(WAVEHDR));
+	waveOutClose(a.h);
+	a.h = nullptr; a.rate = 0;
+	for (int i = 0; i < 4; i++) a.primed[i] = false;
+}
+
+bool AmbienceStart(int id) {
+	AmbiencePlayer &a = gAmb;
+	a.stream.end();
+	if (!a.stream.openTrack(a.table, (size_t)id) || !a.stream.begin()) return false;
+	if (a.rate != a.stream.rate) {
+		for (int i = 0; i < 4; i++) if (a.primed[i]) { waveOutReset(a.h); waveOutUnprepareHeader(a.h, &a.hdr[i], sizeof(WAVEHDR)); a.primed[i] = false; }
+		if (a.h) waveOutClose(a.h);
+		a.h = nullptr;
+		WAVEFORMATEX fmt = {WAVE_FORMAT_PCM, 2, (DWORD)a.stream.rate, (DWORD)a.stream.rate * 4, 4, 16, 0};
+		if (waveOutOpen(&a.h, WAVE_MAPPER, &fmt, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) { a.h = nullptr; return false; }
+		a.rate = a.stream.rate;
+	}
+	a.streaming = true;
+	return true;
+}
+
+void AmbienceService() {
+	AmbiencePlayer &a = gAmb;
+	if (getenv("SA_MUTE")) return;
+	if (!a.tried) { a.tried = true; a.tableOk = a.table.load(gameDir + "/audio"); }
+	if (!a.tableOk) return;
+	if (gAmbWant != a.track) {
+		if (a.track >= 0 && a.vol > -40.0f) a.vol -= 0.4f;
+		else {
+			StopAmbienceDevice();
+			if (gAmbWant >= 0 && AmbienceStart(gAmbWant)) { a.track = gAmbWant; a.vol = -34.0f; fprintf(gLog, "ambience: playing track %d%c", gAmbWant, 10); }
+			else if (gAmbWant >= 0) { fprintf(gLog, "ambience: track %d failed to open%c", gAmbWant, 10); gAmbWant = -1; }
+		}
+	} else if (a.track >= 0) a.vol = std::min(-6.0f, a.vol + 1.0f);
+	if (!a.streaming || !a.h) return;
+	float gain = std::pow(10.0f, a.vol / 20.0f);
+	for (int i = 0; i < 4; i++) {
+		WAVEHDR &hd = a.hdr[i];
+		if (a.primed[i] && !(hd.dwFlags & WHDR_DONE)) continue;
+		if (a.primed[i]) waveOutUnprepareHeader(a.h, &hd, sizeof(hd));
+		a.buf[i].assign(kRadioChunk * 2, 0);
+		size_t got;
+		if (a.stream.channels == 2) got = a.stream.read(a.buf[i].data(), kRadioChunk);
+		else {
+			got = a.stream.read(a.buf[i].data(), kRadioChunk);   // mono: frames are one sample each, spread to stereo from the end
+			for (size_t k = got; k-- > 0;) { int16_t v = a.buf[i][k]; a.buf[i][2 * k] = v; a.buf[i][2 * k + 1] = v; }
+		}
+		if (got == 0) {   // loop
+			a.primed[i] = false;
+			if (!AmbienceStart(a.track)) return;
+			continue;
+		}
+		for (size_t k = 0; k < got * 2; k++) a.buf[i][k] = (int16_t)(a.buf[i][k] * gain);
+		hd = {};
+		hd.lpData = (LPSTR)a.buf[i].data();
+		hd.dwBufferLength = (DWORD)(got * 4);
+		waveOutPrepareHeader(a.h, &hd, sizeof(hd));
+		waveOutWrite(a.h, &hd, sizeof(hd));
+		a.primed[i] = true;
+	}
+}
+
 // CAudioZones::Update (0x508340) + the zone -> track switch of CAEAmbienceTrackManager::UpdateAmbienceTrackAndVolume (0x4D6E60, table read from gta-reversed): the first active sphere
 // (else box) containing the camera picks an AMBIENCE-pack track (ids 135..174). Re-evaluated every 16th frame or after 20 m like the original.
 // DEVIATIONS: only the track choice is logged (no second audio channel / fade / volume yet); sandstorm, special-mission tracks, indoor/underwater handling (166/174) and the radio-station zones
@@ -1639,7 +1725,7 @@ void UpdateAmbience() {
 	int track = -1;
 	if (az) for (auto &m : kMap) if (m.zone == az->id) track = m.track;
 	if (track != cur) {
-		cur = track;
+		cur = track; gAmbWant = track;
 		fprintf(gLog, "ambience: zone %s (id %d) -> track %d%c", az ? az->name.c_str() : "-", az ? az->id : -1, track, 10);
 	}
 }
@@ -3934,6 +4020,7 @@ void Idle(float dt) {
 	UpdateDoorSounds(dt);
 	UpdateWeaponSound(dt);
 	UpdateAmbience();
+	AmbienceService();
 	UpdateRadio();
 	UpdateEngine();
 	UpdateCars();
