@@ -1356,6 +1356,30 @@ void UpdateWeaponSound(float dt) {
 	PlaySfx(bank.sounds[6], 0.9f, 1.0f);
 }
 
+// Door sounds (CAEVehicleAudioEntity::ProcessAudioEvent, gta-reversed AEVehicleAudioEntity.cpp:550-600): bank GENRL_VEHICLE_GEN (138); open = LIGHT 0x27 / OLD 0x29 / NEW 0x28 (unset too) /
+// TRUCK 0x2B / VAN 0x2A, close = 0x20 / 0x22 / 0x21 / 0x24 / 0x23 by the model's DoorType (DoorTable.inc from the gta-reversed VehicleAudioSettings table, order model id 400..631, not re-read in the
+// exe). DEVIATIONS: played once on entering (open, then close 0.9 s later) and once on leaving (open, close 0.9 s later) at the player's F press, not per real door animation event; flat
+// volume 0.8 (GetDefaultVolume not read), no 3D position, the pitch variance 0.02 is skipped.
+static const signed char kDoorType[] = {
+#include "DoorTable.inc"
+};
+float gDoorCloseAt = -1.0f; int gDoorModel = 0; float gDoorClock = 0.0f;
+void PlayDoorSound(int model, bool open) {
+	static SfxBank bank; static bool loaded = false;
+	if (getenv("SA_MUTE")) return;
+	if (!loaded) { loaded = true; gSfx.loadBank(138, bank); fprintf(gLog, "door bank: %zu sounds\n", bank.sounds.size()); }
+	int t = (model >= 400 && model < 400 + (int)(sizeof(kDoorType))) ? kDoorType[model - 400] : 2;
+	static const int op[5] = {0x27, 0x29, 0x28, 0x2B, 0x2A}, cl[5] = {0x20, 0x22, 0x21, 0x24, 0x23};
+	int id = (open ? op : cl)[t];
+	fprintf(gLog, "door sound: model %d type %d %s id 0x%X\n", model, t, open ? "open" : "close", id);
+	if ((int)bank.sounds.size() > id) PlaySfx(bank.sounds[id], 0.8f, 1.0f);
+}
+void DoorEvent(int model) { PlayDoorSound(model, true); gDoorModel = model; gDoorCloseAt = gDoorClock + 0.9f; }
+void UpdateDoorSounds(float dt) {
+	gDoorClock += dt;
+	if (gDoorCloseAt >= 0.0f && gDoorClock >= gDoorCloseAt) { gDoorCloseAt = -1.0f; PlayDoorSound(gDoorModel, false); }
+}
+
 void UpdateHorn(float dt) {
 	static const struct { int type; float pitch; } kHorn[] = {
 #include "HornTable.inc"
@@ -3778,6 +3802,7 @@ void Idle(float dt) {
 		if (gDriveGen >= 0) {
 			CarGen &g = gCarGens[gDriveGen];
 			camPos = {g.pos.x + std::cos(g.angle) * 2.5f, g.pos.y + std::sin(g.angle) * 2.5f, g.pos.z + 1.5f};
+			DoorEvent(g.model);
 			gDriveGen = -1; gGrounded = false; gVelZ = 0.0f;
 		} else {
 			int best = -1; float bd = getenv("SA_AUTODRIVE") ? 25600.0f : 25.0f;
@@ -3788,7 +3813,7 @@ void Idle(float dt) {
 				if (d2 < bd) { bd = d2; best = (int)i; }
 			}
 			fprintf(gLog, "F pressed: nearest car gen %d d2 %.0f\n", best, bd);
-			if (best >= 0) StartDriving(best);
+			if (best >= 0) { StartDriving(best); DoorEvent(gCarGens[best].model); }
 		}
 	}
 	fDown = sk::keys['F'];
@@ -3813,6 +3838,7 @@ void Idle(float dt) {
 	AnimatePed(dt);
 	UpdateFootsteps(dt);
 	UpdateHorn(dt);
+	UpdateDoorSounds(dt);
 	UpdateWeaponSound(dt);
 	UpdateRadio();
 	UpdateEngine();
