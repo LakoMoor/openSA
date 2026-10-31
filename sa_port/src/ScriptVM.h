@@ -52,6 +52,7 @@ public:
 
 	// zone_key (8 chars upper-case) -> population type, filled by SET_ZONE_POPULATION_TYPE
 	std::map<std::string, int> zonePopType;
+	std::vector<std::pair<std::string, bool>> audioZoneSwitches;   // SWITCH_AUDIO_ZONE (name, enable) in execution order
 	std::map<uint16_t, uint32_t> unhandled;   // opcode -> times executed without a handler
 	std::map<uint16_t, uint32_t> handled;
 	uint64_t commandsRun = 0;

@@ -2538,6 +2538,8 @@ void UpdateCars() {
 			});
 		if (gVM.load(gameDir + "/data/script/main.scm")) {
 			for (int i = 0, stable = 0; i < 200 && stable < 5; i++) { size_t before = gVM.zonePopType.size(); gVM.tick(20); stable = (before == gVM.zonePopType.size() && before > 0) ? stable + 1 : 0; }
+			for (auto &sw : gVM.audioZoneSwitches) for (auto &z : gAuZones) if (!_stricmp(z.name.c_str(), sw.first.c_str())) z.active = sw.second;   // CAudioZones::SwitchAudioZone (0x508320)
+			fprintf(gLog, "script: %zu audio zone switches applied%c", gVM.audioZoneSwitches.size(), 10);
 			fprintf(gLog, "script: %zu threads, %llu commands, %zu zone population types\n", gVM.threadCount(), (unsigned long long)gVM.commandsRun, gVM.zonePopType.size());
 		}
 		if (!gHandling.load(gameDir + "/data/handling.cfg")) fprintf(gLog, "handling.cfg failed to load\n");

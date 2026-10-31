@@ -302,6 +302,9 @@ bool ScriptVM::execute(ScmThread &t, uint16_t op, bool neg, std::vector<ScmArg> 
 		ref(t, args[0]) = asI(((m_rng >> 8) & 0xffff) / 65536.0f);
 		return true;
 	}
+	case 0x0917: // SWITCH_AUDIO_ZONE
+		audioZoneSwitches.emplace_back(args[0].str, getI(t, args[1]) != 0);
+		return true;
 	case 0x0767: // SET_ZONE_POPULATION_TYPE
 		zonePopType[args[0].str] = getI(t, args[1]);
 		return true;
