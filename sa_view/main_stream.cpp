@@ -2154,6 +2154,7 @@ HandlingCfg gHandling;
 // Tyre adhesion by surface: data/surface.dat (lower-triangle matrix of adhesion groups) + data/surfinfo.dat (group per surface). SurfaceInfos_c::GetAdhesiveLimit
 // = limits[ground group][RUBBER] for a wheel. The surfinfo.dat row index is the COL surface id (checked: SurfaceInfos_c::GetSurfaceIdFromName in gta-reversed maps all 178 named rows to their file order; DEFAULT = 0).
 std::vector<int> gSurfGroup;
+std::vector<uint8_t> gSurfWheelDust;   // SurfaceInfos_c::CreatesWheelDust per surface id
 float gAdhLimits[6][6];
 bool gAdhLoaded = false;
 void LoadSurfaces(const std::string &gameDir) {
@@ -2176,6 +2177,10 @@ void LoadSurfaces(const std::string &gameDir) {
 		std::string name, group; ss >> name >> group;
 		auto it = grp.find(group);
 		gSurfGroup.push_back(it == grp.end() ? 2 : it->second);
+		// columns after the group (SurfaceInfo::Read order): tyre grip, wet grip, skidmark, friction effect, then 26 flags; index 23 = WheelDust
+		std::string tg, wg, sk, fe; ss >> tg >> wg >> sk >> fe;
+		int flags[26] = {}; for (int k = 0; k < 26; k++) ss >> flags[k];
+		gSurfWheelDust.push_back((uint8_t)flags[23]);
 	}
 	gAdhLoaded = row == 6 && !gSurfGroup.empty();
 	fprintf(gLog, "surfaces: %d surfinfo rows, road/rubber %.1f, loose/rubber %.1f\n", (int)gSurfGroup.size(), gAdhLimits[2][0], gAdhLimits[3][0]);
@@ -2210,6 +2215,7 @@ void UpdateOverheat() {
 	{ static bool logged = false; if (!logged) { logged = true; fprintf(gLog, "fx: overheat at (%.2f %.2f %.2f), car (%.2f %.2f %.2f), engine dummy local (%.2f %.2f %.2f), time %.2f%c", gOverheat.pos[0], gOverheat.pos[1], gOverheat.pos[2], gPhys.pos.x, gPhys.pos.y, gPhys.pos.z, gEngineDummy.x, gEngineDummy.y, gEngineDummy.z, gOverheat.t, 10); } }
 }
 void FxExhaust(float ticks, float gas, bool wet);
+void FxWheelDust(float ticks, float gas);
 
 void StartPhysics(CarGen &g) {
 	gPhysActive = false;
@@ -2297,6 +2303,7 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 	}
 	gPhys.step(dt * 50.0f, in, ground);
 	FxExhaust(dt * 50.0f, std::max(0.0f, in.gas), false);
+	FxWheelDust(dt * 50.0f, std::max(0.0f, in.gas));
 	UpdateOverheat();
 	if (!getenv("SA_NOBUOY") && gDriveHandling && gDriveHandling->percentSubmerged > 0) {   // cBuoyancy port (VehiclePhysics.cpp). DEVIATION: the collision box is ESTIMATED from the wheel dummies (x +-0.25 beyond the wheels, y wheels*1.25, z from wheel centre - 0.35 to +1.5 above), flat water.
 		float xm = 0, ymin = 1e9f, ymax = -1e9f, zmin = 1e9f;
@@ -3791,6 +3798,59 @@ void FxExhaust(float ticks, float gas, bool wet) {
 			              gPhys.pos.z + gPhys.right.z * lx + gPhys.fwd.z * gExhaust.y + gPhys.up.z * gExhaust.z};
 			for (int k = 0; k < 2 && sm->alive() < 2000; k++) sm->addParticle(p, v, m);
 			{ static int logged = 0; if (logged++ < 2) fprintf(gLog, "fx: exhaust %d at (%.2f %.2f %.2f) local (%.2f %.2f %.2f) alpha %.3f life %.3f vel %.2f%c", e, p[0], p[1], p[2], gExhaust.x, gExhaust.y, gExhaust.z, m.a, m.life, v[0], 10); }
+		}
+	}
+}
+
+// Wheel dust: Fx_c::AddWheelDust (exe 0x4A09C0, fully read, see PLAN.md) called per wheel in contact with a surface that has the WheelDust flag (surfinfo.dat). Spin value m_fWheelSpinForAudio
+// as in CAutomobile::ProcessControl (gta-reversed Automobile.cpp:905..935; constants from the exe: spinning wheel +1, driven wheel in the air under gas +10, x0.5 (x0.25 for 4WD), rise 0.95 / fall 0.7).
+// DEVIATIONS: the real caller CVehicle::AddSingleWheelParticles (0x6DE880) decides when dust is produced (isProduceWheelDrops) - here: wheel in contact and car speed > 1 m/s; wet roads
+// (CreateDryFx WetRoads test), sand / gravel / grass / mud / spray variants and the 0x56E0D0 distance gate are not done (the gate is treated as 0); fx quality assumed high; lightMult 1.0.
+void FxWheelDust(float ticks, float gas) {
+	if (!gPhysActive || gDriveGen < 0 || gSurfWheelDust.empty()) return;
+	static float acc = 0.0f, wheelSpin = 0.0f;
+	static unsigned frame = 0;
+	acc += ticks;
+	FxEmitterSim *sm = nullptr;
+	while (acc >= 1.0f) {
+		acc -= 1.0f; frame++;
+		float rate = 0.0f;
+		for (int i = 0; i < 4; i++) {
+			bool air = gPhys.compression[i] >= 0.999f;
+			bool driven = (i == vp::W_FL || i == vp::W_FR) ? gPhys.driveType != 'R' : gPhys.driveType != 'F';
+			if (air && (gas > 0.5f || gas < -0.5f) && driven) rate += 10.0f;
+			else if (gPhys.wheelState[i] == vp::WS_SPINNING) rate += 1.0f;
+		}
+		rate *= gPhys.driveType == '4' ? 0.25f : 0.5f;
+		wheelSpin = wheelSpin * (rate >= wheelSpin ? 0.95f : 0.7f) + (1.0f - (rate >= wheelSpin ? 0.95f : 0.7f)) * rate;
+		float speed = std::sqrt(gPhys.moveSpeed.x * gPhys.moveSpeed.x + gPhys.moveSpeed.y * gPhys.moveSpeed.y + gPhys.moveSpeed.z * gPhys.moveSpeed.z);
+		if (speed * 50.0f <= 1.0f) continue;
+		float dx = gPhys.pos.x - camPos.x, dy = gPhys.pos.y - camPos.y, dz = gPhys.pos.z - camPos.z, d2 = dx * dx + dy * dy + dz * dz;
+		if (d2 > 625.0f) continue;
+		unsigned fm = frame + (unsigned)gCarGens[gDriveGen].model;
+		if (fm & 1) continue;                  // quality >= 1: every other frame
+		if (d2 > 64.0f && (fm & 3)) continue;  // beyond 8 m (gate value 0): every fourth
+		if (!sm && !(sm = FxSimFor("prt_sand", false))) return;
+		float f = std::min(2.0f * speed, 1.0f);
+		for (int i = 0; i < 4; i++) {
+			if (gPhys.compression[i] >= 0.999f) continue;
+			vp::V3 w = gPhys.pos + gPhys.mul3(gPhys.wheelLocal[i]);
+			float gz;
+			if (!GroundHeight(w.x, w.y, w.z + 0.5f, 2.0f, gz)) continue;
+			int mat = gGroundMaterial;
+			if (!getenv("SA_DUSTALL") && (mat < 0 || mat >= (int)gSurfWheelDust.size() || !gSurfWheelDust[mat])) continue;   // SA_DUSTALL: test aid, every surface makes dust
+			float life = 0.1f + 0.05f * f, size = (0.1f + 0.9f * f) * 0.7f;
+			int n = std::max(1, (int)(speed * 1.0f * 1.5f));   // |moveSpeed| * timestep(1) * S(1.5 for cars)
+			auto rnd = []() { return (float)rand() / (float)RAND_MAX; };
+			for (int k = 0; k < n && sm->alive() < 2000; k++) {
+				float v[3] = {rnd() * wheelSpin * -40.0f * gPhys.moveSpeed.x, rnd() * wheelSpin * -40.0f * gPhys.moveSpeed.y, rnd() * (f + 0.6f) + 0.2f};
+				float t = 1.0f - (float)k / (float)n;
+				float p[3] = {w.x - gPhys.moveSpeed.x * t, w.y - gPhys.moveSpeed.y * t, gz - gPhys.moveSpeed.z * t};
+				FxMult m; m.r = 0.51f; m.g = 0.44f; m.b = 0.31f; m.a = 0.5f; m.size = size; m.rot = 0.0f; m.life = life;
+				if (getenv("SA_FXSIZE")) m.size = (float)atof(getenv("SA_FXSIZE")); if (getenv("SA_FXALPHA")) m.a = (float)atof(getenv("SA_FXALPHA"));   // test aids
+				sm->addParticle(p, v, m);
+				{ static int logged = 0; if (logged++ < 2) fprintf(gLog, "fx: wheel dust surface %d wheel %d spin %.2f life %.2f size %.2f n %d%c", mat, i, wheelSpin, life, size, n, 10); }
+			}
 		}
 	}
 }
