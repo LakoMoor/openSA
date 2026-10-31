@@ -431,7 +431,7 @@ void CollectPlacements() {
 	// test aid: SA_CARAT="x y z heading_rad model" adds one fixed car generator (e.g. on a flat street in front of a wall) for drive/damage tests
 	if (const char *ca = getenv("SA_CARAT")) {
 		float x, y, z, h; int m;
-		if (sscanf(ca, "%f %f %f %f %d", &x, &y, &z, &h, &m) == 5) gCarGens.push_back({{x, y, z}, h, m, 0, 0});
+		if (sscanf(ca, "%f %f %f %f %d", &x, &y, &z, &h, &m) == 5) { CarGen cg = {{x, y, z}, h, m, 0, 0}; cg.force = true; cg.ignorePop = true; gCarGens.push_back(cg); }   // forced: spawns whenever the ground is loaded, regardless of the 140 m ring rule
 	}
 	// every car generator gets a collision proxy Inst (id -1, col set while the car is spawned) so GroundHeight / RayCastWorld / PushOutSphere see cars
 	for (CarGen &g : gCarGens) {
@@ -2173,6 +2173,10 @@ float SurfaceAdhesion(int surf) {
 vp::CarPhysics gPhys;
 bool gPhysActive = false;
 
+vp::V3 gExhaust;
+bool gExhaustOk = false;
+void FxExhaust(float ticks, float gas, bool wet);
+
 void StartPhysics(CarGen &g) {
 	gPhysActive = false;
 	if (getenv("SA_KINEMATIC") || !gDriveHandling || !g.clump) return;
@@ -2189,6 +2193,8 @@ void StartPhysics(CarGen &g) {
 	}
 	float size = 0.7f;
 	if (const sa::VehicleDef *vd = gW.ide.FindVehicle(g.model)) if (vd->wheelScaleFront > 0.0f) size = vd->wheelScaleFront;
+	gExhaustOk = false;
+	if (rw::Frame *ef = FindNamedFrame(proto->clump->getFrame(), "exhaust")) { rw::V3d p = ef->getLTM()->pos; gExhaust = {p.x, p.y, p.z}; gExhaustOk = p.x != 0.0f || p.y != 0.0f || p.z != 0.0f; }
 	gPhys.init(*gDriveHandling, wp, size);
 	gPhys.place({g.pos.x, g.pos.y, g.pos.z + 0.1f}, g.angle);
 	gPhysActive = true;
@@ -2251,6 +2257,7 @@ void DrivePhysics(float dt, bool kW, bool kS, bool kA, bool kD, bool kSpace) {
 		holding = false;
 	}
 	gPhys.step(dt * 50.0f, in, ground);
+	FxExhaust(dt * 50.0f, std::max(0.0f, in.gas), false);
 	if (!getenv("SA_NOBUOY") && gDriveHandling && gDriveHandling->percentSubmerged > 0) {   // cBuoyancy port (VehiclePhysics.cpp). DEVIATION: the collision box is ESTIMATED from the wheel dummies (x +-0.25 beyond the wheels, y wheels*1.25, z from wheel centre - 0.35 to +1.5 above), flat water.
 		float xm = 0, ymin = 1e9f, ymax = -1e9f, zmin = 1e9f;
 		for (int i = 0; i < 4; i++) { xm = std::max(xm, std::fabs(gPhys.wheelLocal[i].x)); ymin = std::min(ymin, gPhys.wheelLocal[i].y); ymax = std::max(ymax, gPhys.wheelLocal[i].y); zmin = std::min(zmin, gPhys.wheelLocal[i].z); }
@@ -2533,6 +2540,7 @@ void UpdateCars() {
 		// generator is high priority (IPL flag bit 0) only in the outer ring (>= 140 m) while the player is not moving away from it, i.e. cars appear at the edge of view.
 		// DEVIATION: the player is the camera here; the in-area (interior) check and the generator-owned bWaitUntilFarFromPlayer flag are not modelled.
 		if (std::fabs(g.pos.z - camPos.z) > 50.0f || d2 >= 160.0f * 160.0f) continue;
+		if (g.force && getenv("SA_GENDBG")) { static int n = 0; if (n++ % 300 == 0) fprintf(gLog, "gen dbg: forced gen model %d d2 %.0f frames %d tried %d%c", g.model, d2, gFramesSinceStart, (int)g.tried, 10); }
 		if (!g.force && gFramesSinceStart > 150 && !(d2 >= 140.0f * 140.0f && (camVelX * -dx + camVelY * -dy) <= 0.0f)) continue;
 		if (!g.ignorePop && parked >= parkedLimit) continue;
 		if (g.model < 0) {
@@ -2549,7 +2557,7 @@ void UpdateCars() {
 		for (const CarGen &o : gCarGens) if (&o != &g && o.clump) { float ox = o.pos.x - g.pos.x, oy = o.pos.y - g.pos.y; if (ox * ox + oy * oy < 2.5f * 2.5f) { blocked = true; break; } }
 		if (blocked) continue;
 		float gz;
-		if (!GroundHeight(g.pos.x, g.pos.y, g.pos.z + 3.0f, 10.0f, gz)) continue; // no collision loaded here yet: retry next frame
+		if (!GroundHeight(g.pos.x, g.pos.y, g.pos.z + 3.0f, 10.0f, gz)) { if (g.force && getenv("SA_GENDBG")) { static int n2 = 0; if (n2++ % 300 == 0) fprintf(gLog, "gen dbg: no ground at gen%c", 10); } continue; } // no collision loaded here yet: retry next frame
 		rw::Clump *c = vp->clump->clone();
 		rw::V3d zax = {0, 0, 1};
 		rw::Frame *f = c->getFrame();
@@ -3704,6 +3712,42 @@ void FxAddBlood(const float pos[3], const float dir[3], int amount) {
 		sm->addParticle(pos, v, m);
 	}
 }
+// CVehicle::AddExhaustParticles (gta-reversed Vehicle.cpp:4468) for the driven car, run once per 1/50 s tick: skipped beyond 16 m of the camera (and every other tick beyond 8 m), the exhaust dummy
+// position (second one mirrored in x with the DOUBLE_EXHAUST model flag 0x2000), velocity moveSpeed * 30 when moving forward else a fixed random backwards speed, then with
+// random(1,3) * (gas + 1.1) > 2.5 two prt_smokeII_3_expand particles per exhaust: FxPrtMult(0.9, 0.9, 1.0, alpha = max(0.25 - speed/2, 0), size 0.2, rot 1, life = max(0.2 - speed/2, 0)).
+// DEVIATIONS: the bubble variant when the exhaust is under water is not done (skipped), bike exhaust variants not done, the surface brightness argument is ignored, m_GasPedal is my input gas.
+void FxExhaust(float ticks, float gas, bool wet) {
+	if (!gPhysActive || !gExhaustOk || wet || gDriveGen < 0) return;
+	static float acc = 0.0f;
+	static unsigned frame = 0;
+	static float backSpeed = -0.9f - 0.9f * ((float)rand() / (float)RAND_MAX);
+	acc += ticks;
+	FxEmitterSim *sm = nullptr;
+	while (acc >= 1.0f) {
+		acc -= 1.0f; frame++;
+		float dx = gPhys.pos.x - camPos.x, dy = gPhys.pos.y - camPos.y, dz = gPhys.pos.z - camPos.z, d2 = dx * dx + dy * dy + dz * dz;
+		if (d2 > 256.0f || (d2 > 64.0f && !((frame + (unsigned)gCarGens[gDriveGen].model) & 1))) continue;
+		auto rnd = [](float lo, float hi) { return lo + (hi - lo) * ((float)rand() / (float)RAND_MAX); };
+		if (rnd(1.0f, 3.0f) * (gas + 1.1f) <= 2.5f) continue;
+		if (!sm && !(sm = FxSimFor("prt_smokeII_3_expand", false))) return;
+		float ms = std::sqrt(gPhys.moveSpeed.x * gPhys.moveSpeed.x + gPhys.moveSpeed.y * gPhys.moveSpeed.y + gPhys.moveSpeed.z * gPhys.moveSpeed.z) * 0.5f;
+		float fwdSpeed = gPhys.fwd.x * gPhys.moveSpeed.x + gPhys.fwd.y * gPhys.moveSpeed.y + gPhys.fwd.z * gPhys.moveSpeed.z;
+		float v[3];
+		if (fwdSpeed >= 0.05f) { v[0] = gPhys.moveSpeed.x * 30.0f; v[1] = gPhys.moveSpeed.y * 30.0f; v[2] = gPhys.moveSpeed.z * 30.0f; }
+		else { v[0] = backSpeed * gPhys.fwd.x; v[1] = backSpeed * gPhys.fwd.y; v[2] = backSpeed * gPhys.fwd.z; }
+		FxMult m; m.r = 0.9f; m.g = 0.9f; m.b = 1.0f; m.a = std::max(0.25f - ms, 0.0f); m.size = 0.2f; m.rot = 1.0f; m.life = std::max(0.2f - ms, 0.0f);
+		int n = (gDriveHandling && (gDriveHandling->modelFlags & 0x2000u)) ? 2 : 1;
+		for (int e = 0; e < n; e++) {
+			float lx = e ? -gExhaust.x : gExhaust.x;
+			float p[3] = {gPhys.pos.x + gPhys.right.x * lx + gPhys.fwd.x * gExhaust.y + gPhys.up.x * gExhaust.z,
+			              gPhys.pos.y + gPhys.right.y * lx + gPhys.fwd.y * gExhaust.y + gPhys.up.y * gExhaust.z,
+			              gPhys.pos.z + gPhys.right.z * lx + gPhys.fwd.z * gExhaust.y + gPhys.up.z * gExhaust.z};
+			for (int k = 0; k < 2 && sm->alive() < 2000; k++) sm->addParticle(p, v, m);
+			{ static int logged = 0; if (logged++ < 2) fprintf(gLog, "fx: exhaust %d at (%.2f %.2f %.2f) local (%.2f %.2f %.2f) alpha %.3f life %.3f vel %.2f%c", e, p[0], p[1], p[2], gExhaust.x, gExhaust.y, gExhaust.z, m.a, m.life, v[0], 10); }
+		}
+	}
+}
+
 void DrawFxSim(const FxPrim &prim, const std::vector<FxBillboard> &bb) {
 	if (bb.empty()) return;
 	auto findTex = [&](const std::string &n) -> rw::Texture * {
@@ -3976,7 +4020,7 @@ void Idle(float dt) {
 	}
 	// F: get into the nearest parked car within 5 m / out again
 	static bool fDown = false;
-	if (getenv("SA_AUTODRIVE") && now > 10.0) { sk::keys['F'] = now < 10.2; if (now > 11.0) sk::keys['W'] = true; if (now > 16.0 && atoi(getenv("SA_AUTODRIVE")) != 2) sk::keys['A'] = true; } // test aid
+	if (getenv("SA_AUTODRIVE") && now > 10.0 + (getenv("SA_AUTODELAY") ? atof(getenv("SA_AUTODELAY")) : 0.0)) { double t0 = getenv("SA_AUTODELAY") ? atof(getenv("SA_AUTODELAY")) : 0.0; sk::keys['F'] = now < 10.2 + t0; if (now > 11.0 + t0) sk::keys['W'] = true; if (now > 16.0 + t0 && atoi(getenv("SA_AUTODRIVE")) != 2) sk::keys['A'] = true; } // test aid
 	if (sk::keys['F'] && !fDown && gWalk) {
 		if (gDriveGen >= 0) {
 			CarGen &g = gCarGens[gDriveGen];
