@@ -1352,11 +1352,16 @@ void UpdateWeaponSound(float dt) {
 	static bool loaded = false;
 	static float timer = 0.0f;
 	timer -= dt;
+	static const int kShots[8][2] = {{0, 12}, {3, 8}, {6, 40}, {11, 4}, {17, 8}, {21, 70}, {24, 12}, {26, 90}};   // {sound id, ticks between shots}
+	static int sel = 2; static bool zDown = false;
+	if (sk::keys['Z'] && !zDown && gWalk && gDriveGen < 0) { sel = (sel + 1) % 8; fprintf(gLog, "weapon: sound id %d selected%c", kShots[sel][0], 10); }
+	zDown = sk::keys['Z'];
 	if (gDriveGen >= 0 || !gWalk || !sk::keys['X'] || getenv("SA_MUTE") || timer > 0.0f) return;
 	if (!loaded) { loaded = true; gSfx.loadBank(143, bank); fprintf(gLog, "weapon bank: %zu sounds\n", bank.sounds.size()); }
 	if (bank.sounds.size() <= 6) return;
-	timer = 0.125f;
-	PlaySfx(bank.sounds[6], 0.9f, 1.0f);
+	// key Z cycles the weapon (ASSUMED binding): SND_GENRL_WEAPONS ids of gta-reversed SoundIDs.h - 9mm 0, AK 3, Eagle 6, minigun 11, MP5 17, shotgun 21, silenced 24, sniper 26; cadence per weapon is a guess
+	timer = kShots[sel][1] / 100.0f;
+	if (bank.sounds.size() > (size_t)kShots[sel][0]) PlaySfx(bank.sounds[kShots[sel][0]], 0.9f, 1.0f);
 }
 
 // Pedestrian pain speech, first slice of CAEPedSpeechAudioEntity (step 6). Pain table gPainSpeechLookup read from the exe at 0x8C64B8 (22 contexts x 3 voices x {first, last} int16, -1 = none; rows 0-14 CJ,
